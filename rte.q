@@ -50,35 +50,35 @@ h(".u.sub";`chunkStoreKalmanPfillDRA; `);
 / @param bin (timespan) Granularity (e.g. 00:00:01.000)
 / @param s (symbol list) List of symbols to query
 getBidAskAvg:{[st;et;bin;s]
+    / Ensure s is a list for consistent handling
+    s:(),s;
     
-    / A. Generate Time Grid
-    / Calculate number of bins
-    cnt: 1+floor (et-st)%bin;
-    / Create vector of times
-    times: st + bin * til cnt;
+    / Calculate grid steps
+    cnt:1+"j"$(et-st)%bin;
+    times:st+bin*til cnt;
     
-    / B. Create Grid Table (Cartesian product of Time x Syms)
-    / We need a row for every time for every symbol to ensure forward fill works across gaps
-    grid: ([] time: raze (count s)#enlist times; sym: raze (count times)#'s);
+    / Construct Grid Table (Cartesian Product of Syms x Times)
+    / We repeat the times vector for each symbol
+    gTime:raze (count s)#enlist times;
+    / We repeat each symbol for the length of the time vector
+    gSym:raze (count times)#'s;
     
-    / C. Select relevant raw data from memory
-    raw: select time, sym, Bid, Ask from chunkStoreKalmanPfillDRA 
-         where time within (st;et), sym in s;
+    grid:([] sym:gSym; time:gTime);
     
-    / D. Join Raw Data to Grid (Union Join)
-    / We uj (union join) so we have the grid points + actual data points
-    joined: `time xasc grid uj raw;
+    / Select raw data within range
+    raw:select sym, time, Bid, Ask from chunkStoreKalmanPfillDRA 
+        where sym in s, time within (st;et);
     
-    / E. Forward Fill
-    / 'fills' works on vectors, so we group by sym first
-    filled: update fills Bid, fills Ask by sym from joined;
+    / Sort raw data by sym and time (Required for aj)
+    raw:`sym`time xasc raw;
     
-    / F. Calculate Average
-    / Now that gaps are filled, we calculate the avg of Bid and Ask
-    / We filter for 'time in times' if you only want the grid points, 
-    / or keep all points. Usually, resampling implies keeping just grid points.
-    / Here we take the average over the whole filled window per sym.
-    res: select avgBid: avg Bid, avgAsk: avg Ask by sym from filled;
+    / Perform As-Of Join
+    / This effectively "forward fills" the data onto the exact grid points
+    / If no tick exists before a grid time, it returns null (or previous day's if available)
+    joined:aj[`sym`time; grid; raw];
+    
+    / Calculate Average on the resampled (forward-filled) data
+    res:select avgBid:avg Bid, avgAsk:avg Ask by sym from joined;
     
     :res
  };
