@@ -1,38 +1,18 @@
 / rte.q - Real Time Engine with Forward Fill Average Logic
 
-/ 1. Define Schema
+/ 1. Define Schema (SLIMMED DOWN)
+/ Only keeping time, sym, Bid, Ask.
 chunkStoreKalmanPfillDRA:([]
     time:`timespan$();
     sym:`symbol$();
     Bid:`float$();
-    Ask:`float$();
-    Alpha_11:`float$();
-    Alpha_11_coef_ASK:`float$();
-    Alpha_11_coef_BID:`float$();
-    Alpha_5:`float$();
-    Alpha_5_coef_ASK:`float$();
-    Alpha_5_coef_BID:`float$();
-    Alpha_6:`float$();
-    Alpha_6_coef_ASK:`float$();
-    Alpha_6_coef_BID:`float$();
-    Alpha_8:`float$();
-    Alpha_8_coef_ASK:`float$();
-    Alpha_8_coef_BID:`float$();
-    AskRaw:`float$();
-    AskRawHiddenState:`float$();
-    AskVarRaw:`float$();
-    BidRaw:`float$();
-    BidRawHiddenState:`float$();
-    BidVarRaw:`float$();
-    CPP_ASK_Edge_MHW:`float$();
-    CPP_ASK_Edge_MHW_coef_ASK:`float$();
-    CPP_BID_Edge_MHW:`float$();
-    CPP_BID_Edge_MHW_coef_BID:`float$();
-    ExpiryTimeMicros:`float$();
-    GPS_MID:`float$();
-    IEAC_BASIS_PX:`float$();
-    IEAC_BASIS_PX_coef_ASK:`float$();
-    IEAC_BASIS_PX_coef_BID:`float$()
+    Ask:`float$()
+ );
+
+/ Define a keyed table to hold the live state of averages
+liveAvgTable:([sym:`symbol$()] 
+    avgBid:`float$(); 
+    avgAsk:`float$()
  );
 
 / 2. Analytics Function: getBidAskAvg
@@ -70,13 +50,18 @@ getBidAskAvg:{[st;et;granularity;s]
     :res
  };
 
-/ 3. Upd function (Modified for Event-Driven Calculation)
+/ 3. Upd function (Modified for Schema Mismatch)
 / This function runs every time the Tickerplant sends a new record
 upd:{[t;x]
-    / A. Insert the new data into the table
-    t insert x;
+    / A. Prepare Data for Insertion
+    / If the table is chunkStoreKalmanPfillDRA, we only want the first 4 columns 
+    / (time, sym, Bid, Ask) from the incoming feed 'x'
+    toInsert: $[t=`chunkStoreKalmanPfillDRA; 4#x; x];
+
+    / B. Insert the sliced data into the table
+    t insert toInsert;
     
-    / B. Trigger Calculation immediately
+    / C. Trigger Calculation immediately
     if[t=`chunkStoreKalmanPfillDRA;
         
         / Define Window: Calculate Avg for the last 60 seconds relative to NOW
@@ -89,9 +74,12 @@ upd:{[t;x]
         / Run the calculation
         result: getBidAskAvg[st; now; 00:00:01.000; syms];
         
+        / Update the persistent live table
+        liveAvgTable upsert result;
+
         / Print to Console
         -1 "\n--- Tick Update @ ",string[now]," ---";
-        show result;
+        show liveAvgTable;
     ];
  };
 
@@ -105,4 +93,4 @@ if[null h; -1 "Failed to connect to TP on port ",string tpPort; exit 1];
 
 h(".u.sub";`chunkStoreKalmanPfillDRA; `);
 
--1 "RTE Initialized. Logic: Recalculate Average on Every Tick.";
+-1 "RTE Initialized. Schema reduced to 4 cols (time, sym, Bid, Ask).";
