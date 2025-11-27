@@ -50,9 +50,13 @@ getBidAskAvg:{[st;et;granularity;s]
     :res
  };
 
-/ 3. Upd function (Modified for Schema Mismatch)
+/ 3. Upd function (Robust & Debuggable)
 / This function runs every time the Tickerplant sends a new record
 upd:{[t;x]
+    / DEBUG: Confirm data arrival
+    / 0N! prints to console without stopping execution
+    0N!"Upd received. Table: ",string[t]," | Rows: ",string count first x;
+
     / A. Prepare Data for Insertion
     / If the table is chunkStoreKalmanPfillDRA, we only want the first 4 columns 
     / (time, sym, Bid, Ask) from the incoming feed 'x'
@@ -61,25 +65,31 @@ upd:{[t;x]
     / B. Insert the sliced data into the table
     t insert toInsert;
     
-    / C. Trigger Calculation immediately
+    / C. Trigger Calculation immediately (Protected Execution)
     if[t=`chunkStoreKalmanPfillDRA;
         
-        / Define Window: Calculate Avg for the last 60 seconds relative to NOW
-        now: .z.n;                 
-        st: now - 00:01:00.000;    
-        
-        / Get list of symbols currently in the table
-        syms: distinct chunkStoreKalmanPfillDRA`sym;
-        
-        / Run the calculation
-        result: getBidAskAvg[st; now; 00:00:01.000; syms];
-        
-        / Update the persistent live table
-        liveAvgTable upsert result;
+        / Protected Block: If this fails, it won't kill the upd function
+        @[{
+            / Define Window: Anchor to the DATA time, not the SYSTEM clock
+            / This fixes issues where TP is UTC and RTE is Local, or replay delays
+            now: exec max time from chunkStoreKalmanPfillDRA;
+            if[null now; now:.z.n]; / Fallback if table empty
+            
+            st: now - 00:01:00.000;    
+            
+            / Get list of symbols currently in the table
+            syms: distinct chunkStoreKalmanPfillDRA`sym;
+            
+            / Run the calculation
+            result: getBidAskAvg[st; now; 00:00:01.000; syms];
+            
+            / Update the persistent live table
+            `liveAvgTable upsert result;
 
-        / Print to Console
-        -1 "\n--- Tick Update @ ",string[now]," ---";
-        show liveAvgTable;
+            / Print to Console
+            -1 "\n--- Tick Update @ ",string[now]," ---";
+            show liveAvgTable;
+        };(::);{[err] -1 "Error in Calc Logic: ",err}];
     ];
  };
 
@@ -93,4 +103,4 @@ if[null h; -1 "Failed to connect to TP on port ",string tpPort; exit 1];
 
 h(".u.sub";`chunkStoreKalmanPfillDRA; `);
 
--1 "RTE Initialized. Schema reduced to 4 cols (time, sym, Bid, Ask).";
+-1 "RTE Initialized. Debug Mode On.";
