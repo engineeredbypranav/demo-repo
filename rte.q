@@ -23,31 +23,35 @@ lastRawMsg:();
 / 2. Analytics Function: getBidAskAvg
 / Uses aj (as-of join) for robust forward filling and sampling
 getBidAskAvg:{[st;et;granularity;s]
+    / Debug Inputs
+    0N!"   [Calc] Start. Syms: ",(-3!s)," Range: ",string[st]," - ",string[et];
+
     / Ensure s is a list for consistent handling
     s:(),s;
+    if[0=count s; :([] sym:`symbol$(); avgBid:`float$(); avgAsk:`float$())];
     
     / Calculate grid steps
     cnt:1+"j"$(et-st)%granularity;
+    if[cnt<1; :([] sym:`symbol$(); avgBid:`float$(); avgAsk:`float$())];
+
     times:st+granularity*til cnt;
     
     / Construct Grid Table (Cartesian Product of Syms x Times)
-    / We repeat the times vector for each symbol
-    gTime:raze (count s)#enlist times;
-    / We repeat each symbol for the length of the time vector
-    gSym:raze (count times)#'s;
+    / Method: Create a table with 1 row per sym, containing the whole list of times, then ungroup.
+    / This automatically creates the cartesian product sorted by Sym then Time.
+    grid: ungroup ([] sym:s; time:(count s)#enlist times);
     
-    grid:([] sym:gSym; time:gTime);
+    / 0N!"   [Calc] Grid Rows: ",string count grid;
     
     / Select raw data within range
     raw:select sym, time, Bid, Ask from chunkStoreKalmanPfillDRA 
         where sym in s, time within (st;et);
-    
-    / Sort raw data by sym and time (Required for aj)
-    raw:`sym`time xasc raw;
+        
+    / 0N!"   [Calc] Raw Data Rows Found: ",string count raw;
     
     / Perform As-Of Join
-    / This effectively "forward fills" the data onto the exact grid points
-    joined:aj[`sym`time; grid; raw];
+    / IMPORTANT: 'raw' must be sorted by the join keys (`sym`time) for aj to work.
+    joined:aj[`sym`time; grid; `sym`time xasc raw];
     
     / Calculate Average on the resampled (forward-filled) data
     res:select avgBid:avg Bid, avgAsk:avg Ask by sym from joined;
@@ -63,8 +67,8 @@ upd:{[t;x]
 
     / detailed print to understand the feed structure
     -1 ">> UPD TRIGGERED. Table: ",string[t];
-    -1 "   Type of x: ",string[type x]," (0=List, 98=Table)";
-    -1 "   Count of x: ",string count x;
+    / -1 "   Type of x: ",string[type x]," (0=List, 98=Table)";
+    / -1 "   Count of x: ",string count x;
 
     / A. Prepare Data for Insertion
     / Handle potential differences in TP output (List of cols vs Table)
@@ -81,7 +85,7 @@ upd:{[t;x]
     / We use protected evaluation here too, to catch schema errors
     @[{
         x insert y;
-        -1 "   >> Insert Successful. Table Count: ",string count x;
+        / -1 "   >> Insert Successful. Table Count: ",string count x;
     };(t;toInsert);{[err] -1 "   !! INSERT FAILED: ",err}];
     
     / C. Trigger Calculation immediately
@@ -100,9 +104,8 @@ upd:{[t;x]
 
             `liveAvgTable upsert result;
 
-            -1 "   >> Calculation Updated. Live Table Rows: ",string count liveAvgTable;
-            / Uncomment the line below to spam the console with the table
-            / show liveAvgTable;
+            -1 "   >> Calc Updated. Live Table Rows: ",string count liveAvgTable;
+            show liveAvgTable;
         };(::);{[err] -1 "   !! CALC FAILED: ",err}];
     ];
     -1 "------------------------------------------------";
