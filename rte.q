@@ -10,10 +10,15 @@ chunkStoreKalmanPfillDRA:([]
  );
 
 / Define a keyed table to hold the live state of averages
+/ Added 'time' column to track when the update occurred
 liveAvgTable:([sym:`symbol$()] 
+    time:`timespan$();
     avgBid:`float$(); 
     avgAsk:`float$()
  );
+
+/ DEBUG GLOBAL: Stores the last raw message received from TP
+lastRawMsg:();
 
 / 2. Analytics Function: getBidAskAvg
 / Uses aj (as-of join) for robust forward filling and sampling
@@ -50,47 +55,57 @@ getBidAskAvg:{[st;et;granularity;s]
     :res
  };
 
-/ 3. Upd function (Robust & Debuggable)
+/ 3. Upd function (Deep Debugging Enabled)
 / This function runs every time the Tickerplant sends a new record
 upd:{[t;x]
-    / DEBUG: Confirm data arrival
-    / 0N! prints to console without stopping execution
-    0N!"Upd received. Table: ",string[t]," | Rows: ",string count first x;
+    / Capture the raw message to the global variable for manual inspection
+    lastRawMsg::x;
+
+    / detailed print to understand the feed structure
+    -1 ">> UPD TRIGGERED. Table: ",string[t];
+    -1 "   Type of x: ",string[type x]," (0=List, 98=Table)";
+    -1 "   Count of x: ",string count x;
 
     / A. Prepare Data for Insertion
-    / If the table is chunkStoreKalmanPfillDRA, we only want the first 4 columns 
-    / (time, sym, Bid, Ask) from the incoming feed 'x'
-    toInsert: $[t=`chunkStoreKalmanPfillDRA; 4#x; x];
+    / Handle potential differences in TP output (List of cols vs Table)
+    toInsert: $ [t=`chunkStoreKalmanPfillDRA; 
+        / If x is a table (type 98), select cols. If list (type 0), slice first 4.
+        $[98=type x; 
+            select time, sym, Bid, Ask from x; 
+            4#x 
+        ];
+        x
+    ];
 
     / B. Insert the sliced data into the table
-    t insert toInsert;
+    / We use protected evaluation here too, to catch schema errors
+    @[{
+        x insert y;
+        -1 "   >> Insert Successful. Table Count: ",string count x;
+    };(t;toInsert);{[err] -1 "   !! INSERT FAILED: ",err}];
     
-    / C. Trigger Calculation immediately (Protected Execution)
+    / C. Trigger Calculation immediately
     if[t=`chunkStoreKalmanPfillDRA;
-        
-        / Protected Block: If this fails, it won't kill the upd function
         @[{
-            / Define Window: Anchor to the DATA time, not the SYSTEM clock
-            / This fixes issues where TP is UTC and RTE is Local, or replay delays
             now: exec max time from chunkStoreKalmanPfillDRA;
-            if[null now; now:.z.n]; / Fallback if table empty
+            if[null now; now:.z.n];
             
             st: now - 00:01:00.000;    
-            
-            / Get list of symbols currently in the table
             syms: distinct chunkStoreKalmanPfillDRA`sym;
             
-            / Run the calculation
             result: getBidAskAvg[st; now; 00:00:01.000; syms];
             
-            / Update the persistent live table
+            / Add the 'time' column to the result using the feed time 'now'
+            result: update time:now from result;
+
             `liveAvgTable upsert result;
 
-            / Print to Console
-            -1 "\n--- Tick Update @ ",string[now]," ---";
-            show liveAvgTable;
-        };(::);{[err] -1 "Error in Calc Logic: ",err}];
+            -1 "   >> Calculation Updated. Live Table Rows: ",string count liveAvgTable;
+            / Uncomment the line below to spam the console with the table
+            / show liveAvgTable;
+        };(::);{[err] -1 "   !! CALC FAILED: ",err}];
     ];
+    -1 "------------------------------------------------";
  };
 
 / 4. Connect to Tickerplant and Subscribe
@@ -103,4 +118,4 @@ if[null h; -1 "Failed to connect to TP on port ",string tpPort; exit 1];
 
 h(".u.sub";`chunkStoreKalmanPfillDRA; `);
 
--1 "RTE Initialized. Debug Mode On.";
+-1 "RTE Initialized. Schema updated: 'time' column added to liveAvgTable.";
