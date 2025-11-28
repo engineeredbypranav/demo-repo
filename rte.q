@@ -1,4 +1,4 @@
-/ rte.q - Real Time Engine (Universal Unpacker)
+/ rte.q - Real Time Engine (Forensic Cast Mode)
 
 / 0. Map .u.upd
 .u.upd:upd;
@@ -50,15 +50,17 @@ getBidAskAvg:{[st;et;granularity;s]
     :res
  };
 
-/ 4. Upd Function (The Fix)
+/ 4. Upd Function (Forensic Trace)
 upd:{[t;x]
     -1 ">> upd CALLED. Rows/Cols: ",string count x;
+    
+    / Capture raw message for inspection
+    lastRawMsg::x;
 
     @[{
-        -1 "   [TRACE] 1. Detecting Input Type...";
+        -1 "   [TRACE] 1. Extracting Input...";
         typ: type x;
-        -1 "   [TRACE]    Type is: ",string typ;
-
+        
         / --- BRANCH LOGIC ---
         if[typ=0h; 
             -1 "   [TRACE]    >> PATH: LIST (By Index)";
@@ -70,26 +72,35 @@ upd:{[t;x]
         
         if[typ=98h;
             -1 "   [TRACE]    >> PATH: TABLE (By Name)";
-            / Convert to dictionary to extract cols safe
             d: flip x;
             rawTime: d`time;
             rawSym:  d`sym;
             rawBid:  d`Bid;
             rawAsk:  d`Ask;
         ];
-        
-        if[not typ within (0h; 98h);
-            -1 "!!! [ERROR] Unknown data type: ",string typ;
-            :();
-        ];
 
-        -1 "   [TRACE] 2. Force Casting...";
+        -1 "   [TRACE] 2. Forensic Casting...";
+
+        / A. TIME
+        -1 "   [TRACE]    2a. Casting TIME. Incoming Type: ",string[type rawTime];
         safeTime: "n"$rawTime;
-        safeSym:  "s"$rawSym;
-        safeBid:  "f"$rawBid;
-        safeAsk:  "f"$rawAsk;
-        
-        -1 "   [TRACE] 3. Rebuilding & Inserting...";
+        -1 "   [TRACE]        >> Success.";
+
+        / B. SYM
+        -1 "   [TRACE]    2b. Casting SYM. Incoming Type: ",string[type rawSym];
+        safeSym: "s"$rawSym;
+        -1 "   [TRACE]        >> Success.";
+
+        / C. BID
+        -1 "   [TRACE]    2c. Casting BID. Incoming Type: ",string[type rawBid];
+        safeBid: "f"$rawBid;
+        -1 "   [TRACE]        >> Success.";
+
+        / D. ASK
+        -1 "   [TRACE]    2d. Casting ASK. Incoming Type: ",string[type rawAsk];
+        safeAsk: "f"$rawAsk;
+        -1 "   [TRACE]        >> Success.";        
+        -1 "   [TRACE] 3. Inserting...";
         toInsert: flip `time`sym`Bid`Ask!(safeTime; safeSym; safeBid; safeAsk);
         `rteData insert toInsert;
         
@@ -98,6 +109,7 @@ upd:{[t;x]
 
     };(t;x);{[err] 
         -1 "!!! [UPD CRASHED] ",err;
+        -1 "   >> TIP: The crash happened immediately after the last [TRACE] message.";
     }];
  };
 
@@ -130,4 +142,4 @@ if[not null h;
     h(".u.sub";`chunkStoreKalmanPfillDRA; `);
 ];
 
--1 "RTE Ready. Universal Unpacker Mode.";
+-1 "RTE Ready. Forensic Cast Mode.";
