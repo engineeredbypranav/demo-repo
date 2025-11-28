@@ -1,4 +1,4 @@
-/ rte.q - Real Time Engine (Interleaved Unpacker Mode)
+/ rte.q - Real Time Engine (Logic Flow Fix)
 
 / 0. Map .u.upd
 .u.upd:upd;
@@ -48,36 +48,28 @@ getBidAskAvg:{[st;et;granularity;s]
     :res
  };
 
-/ 4. Upd Function (The Fix: Interleaved Unpacker)
+/ 4. Upd Function (Logic Fixed)
 upd:{[t;x]
     @[{
-        / --- A. DETECT STRUCTURE ---
         typ: type x;
         sourceTable: ();
         
         / CASE 1: Interleaved List (-11 98 -11 98...)
-        / Check if it's a list (0) and the second item is a table (98)
+        / Parentheses around logic ensures correct evaluation order
         isInterleaved: (0=typ) and (98=type x 1);
         
         if[isInterleaved;
             -1 "   [TRACE] Detected Interleaved List (Sym; Table; Sym; Table...)";
             
-            / Extract Symbols (Indices 0, 2, 4...)
             cnt: count x;
             idxSyms: 2*til cnt div 2;
             syms: x idxSyms;
             
-            / Extract Tables (Indices 1, 3, 5...)
             idxTabs: 1 + 2*til cnt div 2;
             tabs: x idxTabs;
             
-            / Merge Tables
-            / We raze the list of tables into one big table
             merged: raze tabs;
             
-            / Stitch Symbols
-            / We assume each table corresponds to one symbol.
-            / If the table rows don't have 'sym', we add it from our 'syms' list.
             if[not `sym in cols merged;
                 merged: update sym:syms from merged
             ];
@@ -92,9 +84,9 @@ upd:{[t;x]
         ];
         
         / CASE 3: Standard List (Columns)
-        if[0=typ and not isInterleaved;
+        / FIX: Added parens around (0=typ) so it doesn't merge with 'and'
+        if[(0=typ) and not isInterleaved;
              -1 "   [TRACE] Detected Standard List of Columns.";
-             / Try to flip it to a table, assuming standard structure
              sourceTable: flip `time`sym`Bid`Ask!(x 0; x 1; x 2; x 3);
         ];
 
@@ -104,13 +96,9 @@ upd:{[t;x]
         ];
 
         / --- B. SELECT & CAST ---
-        / Now we have a 'sourceTable', we just need to normalize types
         -1 "   [TRACE] Normalizing Table...";
         
-        / Select only what we need (tolerant of extra cols)
         d: select time, sym, Bid, Ask from sourceTable;
-        
-        / Force Cast
         d: update "n"$time, "s"$sym, "f"$Bid, "f"$Ask from d;
         
         / --- C. INSERT ---
@@ -154,4 +142,4 @@ if[not null h;
     h(".u.sub";`chunkStoreKalmanPfillDRA; `);
 ];
 
--1 "RTE Ready. Interleaved Unpacker Mode.";
+-1 "RTE Ready. Logic Fix Applied.";
