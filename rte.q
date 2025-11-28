@@ -1,4 +1,4 @@
-/ rte.q - Real Time Engine (Final Diagnostic)
+/ rte.q - Real Time Engine (Verbose Tracing)
 
 / 0. Map .u.upd
 .u.upd:upd;
@@ -8,10 +8,8 @@
 \t 10000
 / -------------------
 
-/ 1. Nuke & Define Schema
-/ We delete the table first to ensure a fresh definition
+/ 1. Define Schema
 delete rteData from `.;
-
 rteData:([]
     time:`timespan$();
     sym:`symbol$();
@@ -25,13 +23,19 @@ liveAvgTable:([sym:`symbol$()]
     avgAsk:`float$()
  );
 
-/ 2. Analytics Function
+/ 2. Analytics Function (With TRACE Prints)
 getBidAskAvg:{[st;et;granularity;s]
     s:(),s;
-    if[0=count s; :()];
+    if[0=count s; 
+        -1 "   [TRACE] Calc stopping: No symbols provided."; 
+        :()
+    ];
     
     cnt:1+"j"$(et-st)%granularity;
-    if[cnt<1; :()];
+    if[cnt<1; 
+        -1 "   [TRACE] Calc stopping: Grid count < 1 (Start: ",string[st]," End: ",string[et],")"; 
+        :()
+    ];
 
     times:st+granularity*til cnt;
     grid: ([] sym:s) cross ([] time:times);
@@ -39,38 +43,38 @@ getBidAskAvg:{[st;et;granularity;s]
     raw:select sym, time, Bid, Ask from rteData 
         where sym in s, time within (st;et);
 
-    if[0=count raw; :()];
+    if[0=count raw; 
+        -1 "   [TRACE] Calc stopping: No raw data found in window ",string[st]," - ",string[et]; 
+        -1 "   [TRACE] rteData total rows: ",string[count rteData]," (Last time: ",string[last rteData`time],")";
+        :()
+    ];
 
     joined:aj[`sym`time; grid; `sym`time xasc raw];
     res:select avgBid:avg Bid, avgAsk:avg Ask by sym from joined;
     :res
  };
 
-/ 3. Upd Function (Step-by-Step)
+/ 3. Upd Function
 upd:{[t;x]
-    
+    / Print entry to prove we are inside
+    -1 ">> upd CALLED. Rows: ",string count x;
+
     / --- STEP 1: PREPARE DATA ---
-    / We do this outside the trap to see if SELECT fails
     d: select time, sym, Bid, Ask from x;
-    
-    / Force clean types based on your META screenshot
     d: update "n"$time, "s"$sym, "f"$Bid, "f"$Ask from d;
 
-    / --- STEP 2: INSERT (Trap A) ---
+    / --- STEP 2: INSERT ---
     inserted: 0b;
     @[{
         `rteData insert y;
         inserted::1b;
+        -1 "   [TRACE] Inserted ",string[count y]," rows into rteData.";
     };(t;d);{[err] 
         -1 "!!! [INSERT FAIL] ",err;
-        -1 "   >> Meta of Data trying to insert:";
         show meta d;
-        -1 "   >> Meta of Target Table (rteData):";
-        show meta rteData;
     }];
 
-    / --- STEP 3: CALC (Trap B) ---
-    / Only run if insert succeeded
+    / --- STEP 3: CALC ---
     if[inserted;
         @[{
             runCalc[];
@@ -81,24 +85,23 @@ upd:{[t;x]
 / 4. Calculation Trigger
 runCalc:{
     now: exec max time from rteData;
-    if[null now; :()];
+    if[null now; -1 "   [TRACE] runCalc stopping: 'now' is null"; :()];
     
     st: now - 00:01:00.000;    
     syms: distinct rteData`sym;
     
+    -1 "   [TRACE] Running getBidAskAvg... (Syms: ",string[count syms],")";
     result: getBidAskAvg[st; now; 00:00:01.000; syms];
     
     if[count result;
-        / CRITICAL: Ensure 'time' col is added before upsert
         result: update time:now from result;
-        
-        / UPSERT
         `liveAvgTable upsert result;
-        
         -1 ">> SUCCESS. Live Table Updated (Rows: ",string[count result],")";
         show liveAvgTable;
         -1 "------------------------------------------------";
     ];
+    
+    if[0=count result; -1 "   [TRACE] Result was empty. No update."];
  };
 
 / 5. Connection
@@ -110,4 +113,4 @@ if[not null h;
     h(".u.sub";`chunkStoreKalmanPfillDRA; `);
 ];
 
--1 "RTE Ready. Split-Trap Mode.";
+-1 "RTE Ready. Tracing Active.";
