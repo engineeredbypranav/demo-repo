@@ -17,8 +17,20 @@ liveAvgTable:([sym:`symbol$()]
     avgAsk:`float$()
  );
 
-/ DEBUG GLOBAL: Stores the last raw message received from TP
+/ DEBUG TABLES & VARS
+/ Stores the last raw message received from TP
 lastRawMsg:();
+/ In-memory log for Kdb Studio inspection
+debugLog:([] time:`timestamp$(); level:`symbol$(); msg:`char$(); payload:());
+
+/ Helper to log events (visible in Kdb Studio via 'select from debugLog')
+logEvent:{[lvl; m; p]
+    `debugLog insert (.z.p; lvl; m; p);
+    / Keep log size manageable (last 1000 rows)
+    if[1005<count debugLog; delete from `debugLog where i < 5];
+    / Also print to console for backup
+    -1 string[.z.p]," [",string[lvl],"] ",m;
+ };
 
 / 2. Analytics Function: getBidAskAvg
 getBidAskAvg:{[st;et;granularity;s]
@@ -41,7 +53,7 @@ getBidAskAvg:{[st;et;granularity;s]
     
     / DEBUG: Check if we actually found data
     if[0=count raw; 
-        0N!"[Calc] WARNING: No raw data found in window. Returning grid with nulls.";
+        logEvent[`WARN; "Calc: No raw data found in window"; (st;et)];
     ];
         
     / Perform As-Of Join
@@ -59,7 +71,7 @@ upd:{[t;x]
     / Capture raw msg
     lastRawMsg::x;
 
-    -1 "\n>> UPD TRIGGERED. Table: ",string[t];
+    logEvent[`INFO; "UPD Triggered for table: ",string[t]; ()];
 
     / A. Prepare Data for Insertion
     toInsert: $ [t=`chunkStoreKalmanPfillDRA; 
@@ -75,13 +87,11 @@ upd:{[t;x]
     / B. Insert (With Type Debugging)
     @[{
         x insert y;
-        -1 "   >> Insert OK. Rows in chunkStore: ",string count x;
+        logEvent[`INFO; "Insert OK. Rows in chunkStore: ",string count x; ()];
     };(t;toInsert);{[err; data] 
-        -1 "!!! INSERT FAILED: ",err; 
-        -1 "   >> Debug Info:";
-        -1 "   >> Expected Types: timestamp, symbol, float, float";
-        -1 "   >> Incoming Types: ",(-3!type each data);
-        -1 "   >> Incoming Sample: ",(-3!first each data);
+        logEvent[`ERROR; "INSERT FAILED: ",err; data];
+        logEvent[`DEBUG; "Expected Types: timestamp, symbol, float, float"; ()];
+        logEvent[`DEBUG; "Incoming Types: "; type each data];
     }[;toInsert]];
     
     / C. Trigger Calculation
@@ -100,17 +110,16 @@ upd:{[t;x]
             / 4. Run Calc
             result: getBidAskAvg[st; now; 00:00:01.000; syms];
             
-            if[0=count result; -1 "   >> Calc returned 0 rows."];
+            if[0=count result; logEvent[`WARN; "Calc returned 0 rows"; ()]];
 
             / 5. Timestamp and Upsert
             result: update time:now from result;
             `liveAvgTable upsert result;
 
             / 6. Visual Confirmation
-            -1 "   >> Updated liveAvgTable with ",string[count result]," rows. (Time: ",string[now],")";
-            show liveAvgTable;
+            logEvent[`INFO; "Updated liveAvgTable"; result];
             
-        };(::);{[err] -1 "!!! CALC FAILED: ",err}];
+        };(::);{[err] logEvent[`ERROR; "CALC FAILED: ",err; ()]}];
     ];
  };
 
@@ -119,9 +128,13 @@ tpPort:5010;
 if[not null "J"$first .z.x; tpPort:"J"$first .z.x];
 
 h:@[hopen;tpPort;{0N}];
-if[null h; -1 "Failed to connect to TP on port ",string tpPort; exit 1];
--1 "Connected to TP on port ",string tpPort;
+if[null h; 
+    logEvent[`FATAL; "Failed to connect to TP on port ",string tpPort; ()];
+    -1 "Failed to connect to TP on port ",string tpPort; 
+    exit 1
+ ];
 
+logEvent[`INFO; "Connected to TP on port ",string tpPort; ()];
 h(".u.sub";`chunkStoreKalmanPfillDRA; `);
 
--1 "RTE Initialized. Debug Mode: VERBOSE.";
+-1 "RTE Initialized. Check 'debugLog' table for activity.";
