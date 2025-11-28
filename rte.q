@@ -1,13 +1,15 @@
-/ rte.q - Real Time Engine (Logic Flow Fix)
+/ rte.q - Real Time Engine (Production Silent Mode)
 
 / 0. Map .u.upd
 .u.upd:upd;
 
-/ --- DEBUG TOOLS ---
+/ --- CONFIG ---
+/ Heartbeat every 30 seconds (Quiet)
 .z.ts:{ -1 "[RTE] Alive..."; };
-\t 10000
+\t 30000
 
 / 1. MANUAL DISPATCHER
+/ Keeps the manual dispatch logic as it proved necessary for your feed
 .z.ps:{[x]
     func: first x;
     if[func in `upd`.u.upd;
@@ -48,72 +50,52 @@ getBidAskAvg:{[st;et;granularity;s]
     :res
  };
 
-/ 4. Upd Function (Logic Fixed)
+/ 4. Upd Function (Silent)
+/ Contains the logic fix for Interleaved Lists, but without the noise.
 upd:{[t;x]
     @[{
         typ: type x;
         sourceTable: ();
         
-        / CASE 1: Interleaved List (-11 98 -11 98...)
-        / Parentheses around logic ensures correct evaluation order
+        / CASE 1: Interleaved List (-11 98...)
         isInterleaved: (0=typ) and (98=type x 1);
         
         if[isInterleaved;
-            -1 "   [TRACE] Detected Interleaved List (Sym; Table; Sym; Table...)";
-            
             cnt: count x;
             idxSyms: 2*til cnt div 2;
             syms: x idxSyms;
-            
             idxTabs: 1 + 2*til cnt div 2;
             tabs: x idxTabs;
-            
             merged: raze tabs;
-            
             if[not `sym in cols merged;
                 merged: update sym:syms from merged
             ];
-            
             sourceTable: merged;
         ];
 
-        / CASE 2: Standard Table (98)
-        if[98=typ; 
-            -1 "   [TRACE] Detected Standard Table.";
-            sourceTable: x
-        ];
+        / CASE 2: Standard Table
+        if[98=typ; sourceTable: x];
         
-        / CASE 3: Standard List (Columns)
-        / FIX: Added parens around (0=typ) so it doesn't merge with 'and'
+        / CASE 3: Standard List
         if[(0=typ) and not isInterleaved;
-             -1 "   [TRACE] Detected Standard List of Columns.";
              sourceTable: flip `time`sym`Bid`Ask!(x 0; x 1; x 2; x 3);
         ];
 
-        if[0=count sourceTable;
-             -1 "!!! [ERROR] Could not unpack data. Type: ",string typ;
-             :();
-        ];
+        if[0=count sourceTable; :()];
 
-        / --- B. SELECT & CAST ---
-        -1 "   [TRACE] Normalizing Table...";
-        
+        / --- PROCESS ---
         d: select time, sym, Bid, Ask from sourceTable;
         d: update "n"$time, "s"$sym, "f"$Bid, "f"$Ask from d;
         
-        / --- C. INSERT ---
         `rteData insert d;
-        -1 "   [TRACE] Inserted ",string[count d]," rows.";
         
-        / --- D. CALC ---
+        / Trigger calculation silently
         runCalc[];
 
-    };(t;x);{[err] 
-        -1 "!!! [UPD CRASHED] ",err;
-    }];
+    };(t;x);{[err] -1 "!!! [UPD ERROR] ",err}];
  };
 
-/ 5. Calculation Trigger
+/ 5. Calculation Trigger (Silent)
 runCalc:{
     @[{
         now: exec max time from rteData;
@@ -126,11 +108,9 @@ runCalc:{
         if[count result;
             result: update time:now from result;
             `liveAvgTable upsert result;
-            -1 ">> SUCCESS. Live Table Updated (Rows: ",string[count result],")";
-            show liveAvgTable;
-            -1 "------------------------------------------------";
+            / No print here -> No console flooding
         ];
-    };(::);{[err] -1 "!!! [CALC CRASH] ",err}];
+    };(::);{[err] -1 "!!! [CALC ERROR] ",err}];
  };
 
 / 6. Connection
@@ -142,4 +122,4 @@ if[not null h;
     h(".u.sub";`chunkStoreKalmanPfillDRA; `);
 ];
 
--1 "RTE Ready. Logic Fix Applied.";
+-1 "RTE Ready. Silent Mode active (Type 'liveAvgTable' to view results).";
