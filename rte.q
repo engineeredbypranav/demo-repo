@@ -1,140 +1,117 @@
 / rte.q - Real Time Engine with Forward Fill Average Logic
 
+/ 0. CRITICAL FIXES for Function Mapping
+/ Map .u.upd to upd because feed.q likely calls .u.upd
+.u.upd:upd;
+/ Map .u.end to prevent errors at end of day
+.u.end:{[x;y] -1 "Received End of Day"; };
+
 / 1. Define Schema
-/ CRITICAL CHANGE: Changed 'time' to timestamp$() (type 12/p) to match standard TP output.
-/ If your TP sends timespan (type 16/n), change this back to timespan$().
+/ Keeping time as timespan (n) based on previous check.
 chunkStoreKalmanPfillDRA:([]
-    time:`timestamp$();
+    time:`timespan$();
     sym:`symbol$();
     Bid:`float$();
     Ask:`float$()
  );
 
-/ Define a keyed table to hold the live state of averages
 liveAvgTable:([sym:`symbol$()] 
-    time:`timestamp$();
+    time:`timespan$();
     avgBid:`float$(); 
     avgAsk:`float$()
  );
 
-/ DEBUG TABLES & VARS
-/ Stores the last raw message received from TP
-lastRawMsg:();
-/ In-memory log for Kdb Studio inspection
-debugLog:([] time:`timestamp$(); level:`symbol$(); msg:`char$(); payload:());
+/ DEBUG LOGGING
+debugLog:([] time:`timestamp$(); level:`symbol$(); msg:(); payload:());
 
-/ Helper to log events (visible in Kdb Studio via 'select from debugLog')
+/ Robust logger that handles any data type in payload
 logEvent:{[lvl; m; p]
-    `debugLog insert (.z.p; lvl; m; p);
-    / Keep log size manageable (last 1000 rows)
-    if[1005<count debugLog; delete from `debugLog where i < 5];
-    / Also print to console for backup
-    -1 string[.z.p]," [",string[lvl],"] ",m;
+    @[{
+        `debugLog insert (.z.p; x; y; z);
+        if[1000<count debugLog; delete from `debugLog where i<10]; 
+        -1 string[.z.p]," [",string[x],"] ",y;
+    };(lvl;m;p);{ -1 "LOGGING ERROR: ",x }];
  };
 
-/ 2. Analytics Function: getBidAskAvg
+logEvent[`INFO; "RTE Started. Listening for 'upd' and '.u.upd'"; ()];
+
+/ 1.5 MESSAGE SNIFFER (.z.ps)
+/ This captures ALL async messages sent to this process.
+/ It allows us to debug exactly what function the TP is calling.
+.z.ps:{[x]
+    / Log the raw message structure
+    logEvent[`DEBUG; "RAW MESSAGE RECEIVED"; x];
+    
+    / Execute the message normally
+    value x;
+ };
+
+/ 2. Analytics Function
 getBidAskAvg:{[st;et;granularity;s]
-    / Ensure s is a list for consistent handling
     s:(),s;
     if[0=count s; :([] sym:`symbol$(); avgBid:`float$(); avgAsk:`float$())];
     
-    / Calculate grid steps
     cnt:1+"j"$(et-st)%granularity;
     if[cnt<1; :([] sym:`symbol$(); avgBid:`float$(); avgAsk:`float$())];
 
     times:st+granularity*til cnt;
-    
-    / Construct Grid Table using CROSS (Cartesian Product)
     grid: ([] sym:s) cross ([] time:times);
     
-    / Select raw data within range
     raw:select sym, time, Bid, Ask from chunkStoreKalmanPfillDRA 
         where sym in s, time within (st;et);
     
-    / DEBUG: Check if we actually found data
-    if[0=count raw; 
-        logEvent[`WARN; "Calc: No raw data found in window"; (st;et)];
-    ];
+    if[0=count raw; logEvent[`WARN; "Calc: No raw data found in window"; (st;et)]];
         
-    / Perform As-Of Join
-    / 'raw' must be sorted by the join keys (`sym`time)
     joined:aj[`sym`time; grid; `sym`time xasc raw];
-    
-    / Calculate Average on the resampled (forward-filled) data
     res:select avgBid:avg Bid, avgAsk:avg Ask by sym from joined;
-    
     :res
  };
 
-/ 3. Upd function
+/ 3. Upd Function
 upd:{[t;x]
-    / Capture raw msg
-    lastRawMsg::x;
+    logEvent[`INFO; "upd CALLED for table: ",string[t]; ()];
 
-    logEvent[`INFO; "UPD Triggered for table: ",string[t]; ()];
-
-    / A. Prepare Data for Insertion
+    / A. Slicing Logic
     toInsert: $ [t=`chunkStoreKalmanPfillDRA; 
-        / If x is a table (type 98), select cols. 
-        / If list (type 0), we slicing first 4. 
-        $[98=type x; 
-            select time, sym, Bid, Ask from x; 
-            4#x 
-        ];
+        / Slicing first 4 columns assuming (time; sym; Bid; Ask)
+        $[98=type x; select time, sym, Bid, Ask from x; 4#x];
         x
     ];
 
-    / B. Insert (With Type Debugging)
+    / B. Insert
     @[{
         x insert y;
-        logEvent[`INFO; "Insert OK. Rows in chunkStore: ",string count x; ()];
+        logEvent[`INFO; "Insert Success. Rows: ",string count x; ()];
     };(t;toInsert);{[err; data] 
         logEvent[`ERROR; "INSERT FAILED: ",err; data];
-        logEvent[`DEBUG; "Expected Types: timestamp, symbol, float, float"; ()];
-        logEvent[`DEBUG; "Incoming Types: "; type each data];
     }[;toInsert]];
     
-    / C. Trigger Calculation
+    / C. Calculation
     if[t=`chunkStoreKalmanPfillDRA;
         @[{
-            / 1. Determine Window
             now: exec max time from chunkStoreKalmanPfillDRA;
-            if[null now; now:.z.p]; / Changed fallback to .z.p (timestamp)
+            if[null now; now:.z.n];
             
-            / 2. Define Start Time (60s ago)
             st: now - 00:01:00.000;    
-            
-            / 3. Get Symbols
             syms: distinct chunkStoreKalmanPfillDRA`sym;
             
-            / 4. Run Calc
             result: getBidAskAvg[st; now; 00:00:01.000; syms];
             
-            if[0=count result; logEvent[`WARN; "Calc returned 0 rows"; ()]];
-
-            / 5. Timestamp and Upsert
-            result: update time:now from result;
-            `liveAvgTable upsert result;
-
-            / 6. Visual Confirmation
-            logEvent[`INFO; "Updated liveAvgTable"; result];
-            
+            if[count result;
+                result: update time:now from result;
+                `liveAvgTable upsert result;
+                logEvent[`INFO; "LiveTable Updated"; result];
+            ];
         };(::);{[err] logEvent[`ERROR; "CALC FAILED: ",err; ()]}];
     ];
  };
 
-/ 4. Connect to Tickerplant and Subscribe
+/ 4. Connection
 tpPort:5010;
 if[not null "J"$first .z.x; tpPort:"J"$first .z.x];
 
 h:@[hopen;tpPort;{0N}];
-if[null h; 
-    logEvent[`FATAL; "Failed to connect to TP on port ",string tpPort; ()];
-    -1 "Failed to connect to TP on port ",string tpPort; 
-    exit 1
- ];
+if[null h; logEvent[`FATAL; "Connect Failed"; tpPort]; -1 "Connect Failed"; exit 1];
 
-logEvent[`INFO; "Connected to TP on port ",string tpPort; ()];
+logEvent[`INFO; "Connected to TP. Subscribing..."; tpPort];
 h(".u.sub";`chunkStoreKalmanPfillDRA; `);
-
--1 "RTE Initialized. Check 'debugLog' table for activity.";
