@@ -1,10 +1,7 @@
-/ rte.q - Real Time Engine (Throttled & Verbose)
+/ rte.q - Real Time Engine (Unthrottled & Verbose)
 
 / 0. Map .u.upd to upd
 .u.upd:upd;
-
-/ Global Counter to throttle logs
-updCtr:0;
 
 / 1. Define Schemas
 chunkStoreKalmanPfillDRA:([]
@@ -22,7 +19,7 @@ liveAvgTable:([sym:`symbol$()]
 
 / 2. Analytics Function (With Verbose Debugging)
 getBidAskAvg:{[st;et;granularity;s]
-    -1 "   [CALC STEP] 1. Function called. Range: ",(-3!st)," to ",(-3!et);
+    / -1 "   [CALC STEP] 1. Function called. Range: ",(-3!st)," to ",(-3!et);
     
     s:(),s;
     if[0=count s; -1 "   [CALC WARNING] No symbols provided."; :()];
@@ -32,37 +29,31 @@ getBidAskAvg:{[st;et;granularity;s]
 
     times:st+granularity*til cnt;
     grid: ([] sym:s) cross ([] time:times);
-    -1 "   [CALC STEP] 2. Grid generated. Rows: ",string count grid;
+    / -1 "   [CALC STEP] 2. Grid generated. Rows: ",string count grid;
     
     raw:select sym, time, Bid, Ask from chunkStoreKalmanPfillDRA 
         where sym in s, time within (st;et);
-    -1 "   [CALC STEP] 3. Raw Data Selected. Rows: ",string count raw;
+    / -1 "   [CALC STEP] 3. Raw Data Selected. Rows: ",string count raw;
     
     if[0=count raw; -1 "   [CALC WARNING] No raw data found in this window! (Check timestamps)"];
 
     joined:aj[`sym`time; grid; `sym`time xasc raw];
-    -1 "   [CALC STEP] 4. Join Complete. Rows: ",string count joined;
+    / -1 "   [CALC STEP] 4. Join Complete. Rows: ",string count joined;
 
     res:select avgBid:avg Bid, avgAsk:avg Ask by sym from joined;
     :res
  };
 
-/ 3. Upd Function (Throttled)
+/ 3. Upd Function (Unthrottled)
 upd:{[t;x]
-    / Increment counter
-    updCtr+:1;
-    
     / Attempt Insert
     @[{
         / Slice first 4 columns (Time, Sym, Bid, Ask)
         toInsert: 4#y;
         `chunkStoreKalmanPfillDRA insert toInsert;
         
-        / ONLY Run Calc every 50 updates to prevent console flooding
-        if[0 = (updCtr mod 50);
-            -1 ">> upd #",string[updCtr]," received. Running Calc...";
-            runCalc[];
-        ];
+        / Run Calc immediately on every tick
+        runCalc[];
 
     };(t;x);{[err] -1 "   [INSERT FAIL] ",err}];
  };
@@ -83,15 +74,13 @@ runCalc:{
         st: now - 00:01:00.000;    
         syms: distinct chunkStoreKalmanPfillDRA`sym;
         
-        -1 "   [CALC STEP] 0. Symbols found in table: ",string count syms;
-        
         result: getBidAskAvg[st; now; 00:00:01.000; syms];
         
         if[count result;
             result: update time:now from result;
             `liveAvgTable upsert result;
             
-            -1 ">> SUCCESS. Live Table Updated:";
+            -1 ">> SUCCESS. Live Table Updated (Rows: ",string[count result],")";
             show liveAvgTable;
             -1 "------------------------------------------------";
         ];
@@ -107,4 +96,4 @@ if[not null h;
     h(".u.sub";`chunkStoreKalmanPfillDRA; `);
 ];
 
--1 "RTE Ready. Throttled Output (Every 50 ticks).";
+-1 "RTE Ready. UNTHROTTLED Mode active.";
