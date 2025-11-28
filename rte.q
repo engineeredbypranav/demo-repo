@@ -1,4 +1,4 @@
-/ rte.q - Real Time Engine (Verbose Tracing)
+/ rte.q - Real Time Engine (Paranoid Debug Mode)
 
 / 0. Map .u.upd
 .u.upd:upd;
@@ -23,19 +23,13 @@ liveAvgTable:([sym:`symbol$()]
     avgAsk:`float$()
  );
 
-/ 2. Analytics Function (With TRACE Prints)
+/ 2. Analytics Function
 getBidAskAvg:{[st;et;granularity;s]
     s:(),s;
-    if[0=count s; 
-        -1 "   [TRACE] Calc stopping: No symbols provided."; 
-        :()
-    ];
+    if[0=count s; -1 "   [TRACE] No symbols."; :()];
     
     cnt:1+"j"$(et-st)%granularity;
-    if[cnt<1; 
-        -1 "   [TRACE] Calc stopping: Grid count < 1 (Start: ",string[st]," End: ",string[et],")"; 
-        :()
-    ];
+    if[cnt<1; -1 "   [TRACE] Bad Window."; :()];
 
     times:st+granularity*til cnt;
     grid: ([] sym:s) cross ([] time:times);
@@ -44,8 +38,7 @@ getBidAskAvg:{[st;et;granularity;s]
         where sym in s, time within (st;et);
 
     if[0=count raw; 
-        -1 "   [TRACE] Calc stopping: No raw data found in window ",string[st]," - ",string[et]; 
-        -1 "   [TRACE] rteData total rows: ",string[count rteData]," (Last time: ",string[last rteData`time],")";
+        -1 "   [TRACE] No raw data in window."; 
         :()
     ];
 
@@ -54,54 +47,61 @@ getBidAskAvg:{[st;et;granularity;s]
     :res
  };
 
-/ 3. Upd Function
+/ 3. Upd Function (The Fix)
 upd:{[t;x]
-    / Print entry to prove we are inside
-    -1 ">> upd CALLED. Rows: ",string count x;
-
-    / --- STEP 1: PREPARE DATA ---
-    d: select time, sym, Bid, Ask from x;
-    d: update "n"$time, "s"$sym, "f"$Bid, "f"$Ask from d;
-
-    / --- STEP 2: INSERT ---
-    inserted: 0b;
+    / WRAP EVERYTHING in a trap to catch the "Silent Death"
     @[{
-        `rteData insert y;
-        inserted::1b;
-        -1 "   [TRACE] Inserted ",string[count y]," rows into rteData.";
-    };(t;d);{[err] 
-        -1 "!!! [INSERT FAIL] ",err;
-        show meta d;
-    }];
+        -1 ">> upd CALLED. Rows: ",string count y;
+        
+        / 1. DEBUG COLUMNS
+        / Print what columns we actually have to spot mismatches (e.g. bid vs Bid)
+        c: cols y;
+        -1 "   [COLS FOUND] ",(" " sv string c);
+        
+        / 2. CHECK REQUIRED COLS
+        req: `time`sym`Bid`Ask;
+        missing: req where not req in c;
+        if[count missing;
+            -1 "!!! [CRASH AVERTED] Missing columns: ",(-3!missing);
+            :(); / Abort safely
+        ];
 
-    / --- STEP 3: CALC ---
-    if[inserted;
-        @[{
-            runCalc[];
-        };(::);{[err] -1 "!!! [CALC FAIL] ",err}];
-    ];
+        / 3. SELECT & CAST
+        / We know cols exist now, so this shouldn't crash
+        d: select time, sym, Bid, Ask from y;
+        d: update "n"$time, "s"$sym, "f"$Bid, "f"$Ask from d;
+
+        / 4. INSERT
+        `rteData insert d;
+        -1 "   [TRACE] Inserted ",string[count d]," rows.";
+
+        / 5. CALC
+        runCalc[];
+
+    };(t;x);{[err] 
+        -1 "!!! [UPD CRASHED] ",err;
+    }];
  };
 
 / 4. Calculation Trigger
 runCalc:{
-    now: exec max time from rteData;
-    if[null now; -1 "   [TRACE] runCalc stopping: 'now' is null"; :()];
-    
-    st: now - 00:01:00.000;    
-    syms: distinct rteData`sym;
-    
-    -1 "   [TRACE] Running getBidAskAvg... (Syms: ",string[count syms],")";
-    result: getBidAskAvg[st; now; 00:00:01.000; syms];
-    
-    if[count result;
-        result: update time:now from result;
-        `liveAvgTable upsert result;
-        -1 ">> SUCCESS. Live Table Updated (Rows: ",string[count result],")";
-        show liveAvgTable;
-        -1 "------------------------------------------------";
-    ];
-    
-    if[0=count result; -1 "   [TRACE] Result was empty. No update."];
+    @[{
+        now: exec max time from rteData;
+        if[null now; :()];
+        st: now - 00:01:00.000;    
+        syms: distinct rteData`sym;
+        
+        -1 "   [TRACE] Calc running for ",string[count syms]," syms.";
+        result: getBidAskAvg[st; now; 00:00:01.000; syms];
+        
+        if[count result;
+            result: update time:now from result;
+            `liveAvgTable upsert result;
+            -1 ">> SUCCESS. Live Table Updated.";
+            show liveAvgTable;
+            -1 "------------------------------------------------";
+        ];
+    };(::);{[err] -1 "!!! [CALC CRASH] ",err}];
  };
 
 / 5. Connection
@@ -113,4 +113,4 @@ if[not null h;
     h(".u.sub";`chunkStoreKalmanPfillDRA; `);
 ];
 
--1 "RTE Ready. Tracing Active.";
+-1 "RTE Ready. Paranoid Mode.";
