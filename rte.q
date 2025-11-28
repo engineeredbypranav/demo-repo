@@ -1,6 +1,6 @@
-/ rte.q - Real Time Engine (Key Verification Mode)
+/ rte.q - Real Time Engine (Atomic Trace Mode)
 
-/ 0. Map .u.upd to upd
+/ 0. Map .u.upd
 .u.upd:upd;
 
 / --- DEBUG TOOLS ---
@@ -38,71 +38,67 @@ liveAvgTable:([sym:`symbol$()]
 getBidAskAvg:{[st;et;granularity;s]
     s:(),s;
     if[0=count s; :()];
-    
     cnt:1+"j"$(et-st)%granularity;
     if[cnt<1; :()];
-
     times:st+granularity*til cnt;
     grid: ([] sym:s) cross ([] time:times);
-    
     raw:select sym, time, Bid, Ask from rteData 
         where sym in s, time within (st;et);
-
     if[0=count raw; :()];
-
     joined:aj[`sym`time; grid; `sym`time xasc raw];
     res:select avgBid:avg Bid, avgAsk:avg Ask by sym from joined;
     :res
  };
 
-/ 4. Upd Function (Safest Version Yet)
+/ 4. Upd Function (Atomic Trace)
 upd:{[t;x]
-    -1 ">> upd CALLED. Input Type: ",string type x;
+    -1 ">> upd CALLED. Rows: ",string count x;
 
     @[{
-        / A. DECONSTRUCT
-        / Flip table to dictionary. If list, assume standard order.
-        d: $ [98=type x; flip x; 
-              99=type x; x;
-              / If list, map to expected names manually (Hopeful fallback)
-              `time`sym`Bid`Ask!4#x
-           ];
-
-        / B. VERIFY KEYS
-        / This prevents the 'type' error caused by missing keys returning (::)
-        k: key d;
-        req: `time`sym`Bid`Ask;
-        missing: req where not req in k;
+        -1 "   [TRACE] 1. Extracting columns by INDEX (0,1,2,3)...";
+        / Get column names dynamically to avoid typo/whitespace issues
+        c: cols x;
+        -1 "   [TRACE]    Col 0 Name: ",string[c 0];
+        -1 "   [TRACE]    Col 1 Name: ",string[c 1];
         
-        if[count missing;
-            -1 "!!! [CRITICAL] MISSING COLUMNS: ",(-3!missing);
-            -1 "   >> Available Keys: ",(-3!k);
-            -1 "   >> ABORTING INSERT.";
-            :();
-        ];
+        / Extract raw columns using Table Indexing (safe for Tables)
+        rawTime: x[c 0];
+        rawSym:  x[c 1];
+        rawBid:  x[c 2];
+        rawAsk:  x[c 3];
+        
+        -1 "   [TRACE] 2. Checking Raw Types...";
+        -1 "   [TRACE]    Time Type: ",string type rawTime;
+        -1 "   [TRACE]    Sym Type:  ",string type rawSym;
+        -1 "   [TRACE]    Bid Type:  ",string type rawBid;
+        -1 "   [TRACE]    Ask Type:  ",string type rawAsk;
 
-        / C. SAFE CAST
-        / We now know keys exist, so these lookups won't return (::)
-        cTime: "n"$ d`time;
-        cSym:  "s"$ d`sym;
-        cBid:  "f"$ d`Bid;
-        cAsk:  "f"$ d`Ask;
-
-        / D. REBUILD & INSERT
-        toInsert: flip `time`sym`Bid`Ask!(cTime; cSym; cBid; cAsk);
+        -1 "   [TRACE] 3. Casting...";
+        / Cast individually - if this fails, we know WHICH col is bad
+        safeTime: "n"$rawTime;
+        -1 "   [TRACE]    Time Cast OK";
+        
+        safeSym:  "s"$rawSym;
+        -1 "   [TRACE]    Sym Cast OK";
+        
+        safeBid:  "f"$rawBid;
+        -1 "   [TRACE]    Bid Cast OK";
+        
+        safeAsk:  "f"$rawAsk;
+        -1 "   [TRACE]    Ask Cast OK";
+        
+        -1 "   [TRACE] 4. Rebuilding Table...";
+        toInsert: flip `time`sym`Bid`Ask!(safeTime; safeSym; safeBid; safeAsk);
+        
+        -1 "   [TRACE] 5. Inserting...";
         `rteData insert toInsert;
-        -1 "   [TRACE] Inserted ",string[count toInsert]," rows.";
-
-        / E. CALC
+        
+        -1 "   [TRACE] 6. Done. Running Calc...";
         runCalc[];
 
-    };(t;x);{[x; err] 
-        / We pass 'x' into the error handler so we can inspect it without crashing
+    };(t;x);{[err] 
         -1 "!!! [UPD CRASHED] ",err;
-        -1 "   >> Input Type: ",string type x;
-        -1 "   >> Is Table? ",string 98=type x;
-        -1 "   >> Columns/Keys found: ",(-3!cols x);
-    }[x;]];
+    }];
  };
 
 / 5. Calculation Trigger
@@ -134,4 +130,4 @@ if[not null h;
     h(".u.sub";`chunkStoreKalmanPfillDRA; `);
 ];
 
--1 "RTE Ready. Key Verification Mode.";
+-1 "RTE Ready. Atomic Trace Mode.";
