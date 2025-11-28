@@ -1,7 +1,7 @@
 / rte.q - Real Time Engine with Forward Fill Average Logic
 
-/ 1. Define Schema (SLIMMED DOWN)
-/ Only keeping time, sym, Bid, Ask.
+/ 1. Define Schema
+/ NOTE: We assume the first 4 columns coming from the TP are time, sym, Bid, Ask.
 chunkStoreKalmanPfillDRA:([]
     time:`timespan$();
     sym:`symbol$();
@@ -10,7 +10,6 @@ chunkStoreKalmanPfillDRA:([]
  );
 
 / Define a keyed table to hold the live state of averages
-/ Added 'time' column to track when the update occurred
 liveAvgTable:([sym:`symbol$()] 
     time:`timespan$();
     avgBid:`float$(); 
@@ -23,8 +22,7 @@ lastRawMsg:();
 / 2. Analytics Function: getBidAskAvg
 / Uses aj (as-of join) for robust forward filling and sampling
 getBidAskAvg:{[st;et;granularity;s]
-    / Debug Inputs
-    0N!"   [Calc] Start. Syms: ",(-3!s)," Range: ",string[st]," - ",string[et];
+    / 0N!"[Calc] Start. Syms: ",(-3!s);
 
     / Ensure s is a list for consistent handling
     s:(),s;
@@ -36,21 +34,20 @@ getBidAskAvg:{[st;et;granularity;s]
 
     times:st+granularity*til cnt;
     
-    / Construct Grid Table (Cartesian Product of Syms x Times)
-    / Method: Create a table with 1 row per sym, containing the whole list of times, then ungroup.
-    / This automatically creates the cartesian product sorted by Sym then Time.
-    grid: ungroup ([] sym:s; time:(count s)#enlist times);
-    
-    / 0N!"   [Calc] Grid Rows: ",string count grid;
+    / Construct Grid Table using CROSS (Cartesian Product) - Most Robust Method
+    grid: ([] sym:s) cross ([] time:times);
     
     / Select raw data within range
     raw:select sym, time, Bid, Ask from chunkStoreKalmanPfillDRA 
         where sym in s, time within (st;et);
-        
-    / 0N!"   [Calc] Raw Data Rows Found: ",string count raw;
     
+    / DEBUG: Check if we actually found data
+    if[0=count raw; 
+        0N!"[Calc] WARNING: No raw data found in window. Returning grid with nulls.";
+    ];
+        
     / Perform As-Of Join
-    / IMPORTANT: 'raw' must be sorted by the join keys (`sym`time) for aj to work.
+    / 'raw' must be sorted by the join keys (`sym`time)
     joined:aj[`sym`time; grid; `sym`time xasc raw];
     
     / Calculate Average on the resampled (forward-filled) data
@@ -59,21 +56,17 @@ getBidAskAvg:{[st;et;granularity;s]
     :res
  };
 
-/ 3. Upd function (Deep Debugging Enabled)
-/ This function runs every time the Tickerplant sends a new record
+/ 3. Upd function
 upd:{[t;x]
-    / Capture the raw message to the global variable for manual inspection
+    / Capture raw msg
     lastRawMsg::x;
-
-    / detailed print to understand the feed structure
-    -1 ">> UPD TRIGGERED. Table: ",string[t];
-    / -1 "   Type of x: ",string[type x]," (0=List, 98=Table)";
-    / -1 "   Count of x: ",string count x;
 
     / A. Prepare Data for Insertion
     / Handle potential differences in TP output (List of cols vs Table)
     toInsert: $ [t=`chunkStoreKalmanPfillDRA; 
-        / If x is a table (type 98), select cols. If list (type 0), slice first 4.
+        / If x is a table (type 98), select cols. 
+        / If list (type 0), we slicing first 4. 
+        / CRITICAL: This assumes the feed order is (time; sym; Bid; Ask; ...)
         $[98=type x; 
             select time, sym, Bid, Ask from x; 
             4#x 
@@ -81,34 +74,38 @@ upd:{[t;x]
         x
     ];
 
-    / B. Insert the sliced data into the table
-    / We use protected evaluation here too, to catch schema errors
+    / B. Insert
+    / Using protected evaluation to print RED error if schema mismatches
     @[{
         x insert y;
-        / -1 "   >> Insert Successful. Table Count: ",string count x;
-    };(t;toInsert);{[err] -1 "   !! INSERT FAILED: ",err}];
+    };(t;toInsert);{[err] -1 "!!! INSERT FAILED (Check Types/Order): ",err}];
     
-    / C. Trigger Calculation immediately
+    / C. Trigger Calculation
     if[t=`chunkStoreKalmanPfillDRA;
         @[{
+            / 1. Determine Window
             now: exec max time from chunkStoreKalmanPfillDRA;
-            if[null now; now:.z.n];
+            if[null now; now:.z.n]; 
             
+            / 2. Define Start Time (60s ago)
             st: now - 00:01:00.000;    
+            
+            / 3. Get Symbols
             syms: distinct chunkStoreKalmanPfillDRA`sym;
             
+            / 4. Run Calc
             result: getBidAskAvg[st; now; 00:00:01.000; syms];
             
-            / Add the 'time' column to the result using the feed time 'now'
+            / 5. Timestamp and Upsert
             result: update time:now from result;
-
             `liveAvgTable upsert result;
 
-            -1 "   >> Calc Updated. Live Table Rows: ",string count liveAvgTable;
+            / 6. Visual Confirmation
+            -1 ">> Updated liveAvgTable with ",string[count result]," rows. (Time: ",string[now],")";
             show liveAvgTable;
-        };(::);{[err] -1 "   !! CALC FAILED: ",err}];
+            
+        };(::);{[err] -1 "!!! CALC FAILED: ",err}];
     ];
-    -1 "------------------------------------------------";
  };
 
 / 4. Connect to Tickerplant and Subscribe
@@ -121,4 +118,4 @@ if[null h; -1 "Failed to connect to TP on port ",string tpPort; exit 1];
 
 h(".u.sub";`chunkStoreKalmanPfillDRA; `);
 
--1 "RTE Initialized. Schema updated: 'time' column added to liveAvgTable.";
+-1 "RTE Initialized. Waiting for ticks...";
