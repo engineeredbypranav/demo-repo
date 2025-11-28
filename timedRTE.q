@@ -1,4 +1,4 @@
-/ rte.q - Real Time Engine (With Performance Logging)
+/ rte.q - Real Time Engine (Garbage Collector Fix)
 
 / 0. Map .u.upd
 .u.upd:upd;
@@ -11,12 +11,18 @@ KEEP_WINDOW: 00:05:00.000;
 
 / --- TIMER LOGIC ---
 .z.ts:{ 
-    / Prune old data to keep calc fast
-    cutoff: .z.p - KEEP_WINDOW;
+    / 1. Prune (Garbage Collect)
+    / FIX: Use .z.n (Timespan) instead of .z.p (Timestamp)
+    / This prevents the logic from accidentally deleting all data because
+    / Timestamp (Year 2025) > Timespan (Since Midnight).
+    cutoff: .z.n - KEEP_WINDOW;
     delete from `rteData where time < cutoff;
     
-    / Run Calc
+    / 2. Run Calc
     runCalc[]; 
+    
+    / 3. Status Heartbeat
+    -1 "[STATUS] Time: ",string[.z.t]," | rteData: ",string[count rteData]," rows | liveAvgTable: ",string[count liveAvgTable]," rows";
  };
 
 / 1. MANUAL DISPATCHER
@@ -44,12 +50,11 @@ liveAvgTable:([sym:`symbol$()]
     avgAsk:`float$()
  );
 
-/ 3. Analytics Function (Timed)
+/ 3. Analytics Function
 getBidAskAvg:{[st;et;granularity;s]
-    t0: .z.p; / START TIMER
-    
     s:(),s;
     if[0=count s; :()];
+    
     cnt:1+"j"$(et-st)%granularity;
     if[cnt<1; :()];
     
@@ -64,22 +69,18 @@ getBidAskAvg:{[st;et;granularity;s]
     joined:aj[`sym`time; grid; `sym`time xasc raw];
     res:select avgBid:avg Bid, avgAsk:avg Ask by sym from joined;
     
-    t1: .z.p; / END TIMER
-    -1 "[TIMING] getBidAskAvg (Core Logic): ",string[t1-t0];
-    
     :res
  };
 
-/ 4. Upd Function (Timed)
+/ 4. Upd Function
 upd:{[t;x]
-    t0: .z.p; / START TIMER
-
     @[{
         typ: type x;
         sourceTable: ();
         
         / CASE 1: Interleaved List
-        isInterleaved: (0=typ) and (98=type x 1);
+        isInterleaved: (0=typ) and (count x > 1) and (98=type x 1);
+        
         if[isInterleaved;
             cnt: count x;
             idxSyms: 2*til cnt div 2;
@@ -108,18 +109,10 @@ upd:{[t;x]
         `rteData insert d;
         
     };(t;x);{[err] -1 "!!! [UPD ERROR] ",err}];
-    
-    t1: .z.p; / END TIMER
-    / Only log if it takes longer than 1ms to avoid spam
-    if[(t1-t0) > 00:00:00.001; 
-        -1 "[TIMING] upd (Insert): ",string[t1-t0];
-    ];
  };
 
-/ 5. Calculation Trigger (Timed)
+/ 5. Calculation Trigger
 runCalc:{
-    t0: .z.p; / START TIMER
-
     @[{
         now: exec max time from rteData;
         if[null now; :()];
@@ -134,9 +127,6 @@ runCalc:{
             `liveAvgTable upsert result;
         ];
     };(::);{[err] -1 "!!! [CALC ERROR] ",err}];
-    
-    t1: .z.p; / END TIMER
-    -1 "[TIMING] runCalc (Total Wrapper): ",string[t1-t0];
  };
 
 / 6. Connection
@@ -148,4 +138,4 @@ if[not null h;
     h(".u.sub";`chunkStoreKalmanPfillDRA; `);
 ];
 
--1 "RTE Ready. Timing Logs Enabled.";
+-1 "RTE Ready. Bug Fixed (Timespan vs Timestamp).";
