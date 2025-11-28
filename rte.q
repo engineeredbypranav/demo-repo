@@ -1,4 +1,4 @@
-/ rte.q - Real Time Engine (Auto-Swap Mode)
+/ rte.q - Real Time Engine (Structure Scanner Mode)
 
 / 0. Map .u.upd
 .u.upd:upd;
@@ -48,54 +48,64 @@ getBidAskAvg:{[st;et;granularity;s]
     :res
  };
 
-/ 4. Upd Function (The Fix: Auto-Swap)
+/ 4. Upd Function (The Fix: Scanner & Mapper)
 upd:{[t;x]
     @[{
-        typ: type x;
-        
-        / --- UNPACK LOGIC ---
-        if[typ=0h; 
-            / Check type of FIRST item to determine order
-            / -11h = Symbol, -16h/-12h = Time
-            isSymFirst: -11h = type x 0;
-
-            if[isSymFirst;
-                / -1 "   [TRACE] Detected (Sym; Time...) order. Swapping.";
-                rawSym:  x 0;
-                rawTime: x 1;
-            ];
-            
-            if[not isSymFirst;
-                / -1 "   [TRACE] Detected (Time; Sym...) order.";
-                rawTime: x 0;
-                rawSym:  x 1;
-            ];
-
-            rawBid:  x 2;
-            rawAsk:  x 3;
+        / --- A. SCAN STRUCTURE ---
+        / If it's a list (row), let's look at what we have.
+        if[0=type x;
+             types: type each x;
+             / -1 "   [SCAN] Types of first 5 items: ",(-3!5#types);
+             
+             / --- B. DYNAMIC MAPPING ---
+             / Find Sym (Type -11)
+             idxSym: first where types = -11h;
+             
+             / Find Time (Types -19, -16, -12)
+             idxTime: first where types within -19 -12h; 
+             
+             / Find Floats (Type -9) for Bid/Ask
+             / We assume the first two floats found are Bid and Ask
+             floatIndices: where types = -9h;
+             idxBid: floatIndices 0;
+             idxAsk: floatIndices 1;
+             
+             / --- C. EXTRACTION ---
+             / If we found a Symbol, grab it. Else error.
+             if[null idxSym; -1 "!!! [ERROR] No Symbol column found."; :()];
+             valSym: x idxSym;
+             
+             / If we found a Time, grab it. Else use Local Time.
+             if[not null idxTime; valTime: x idxTime];
+             if[null idxTime; 
+                 / -1 "   [WARN] No Time column found. Using Local Time."; 
+                 valTime: .z.p
+             ];
+             
+             / If we found Floats, grab them.
+             if[any null (idxBid; idxAsk); -1 "!!! [ERROR] Could not find 2 Float columns for Bid/Ask."; :()];
+             valBid: x idxBid;
+             valAsk: x idxAsk;
+             
+             / --- D. CAST & INSERT ---
+             safeTime: "n"$valTime;
+             safeSym:  "s"$valSym;
+             safeBid:  "f"$valBid;
+             safeAsk:  "f"$valAsk;
+             
+             toInsert: flip `time`sym`Bid`Ask!(safeTime; safeSym; safeBid; safeAsk);
+             `rteData insert toInsert;
+             runCalc[];
+             :();
         ];
         
-        if[typ=98h;
+        / Fallback for Tables (Type 98)
+        if[98=type x;
             d: flip x;
-            rawTime: d`time;
-            rawSym:  d`sym;
-            rawBid:  d`Bid;
-            rawAsk:  d`Ask;
+            toInsert: flip `time`sym`Bid`Ask!("n"$d`time; "s"$d`sym; "f"$d`Bid; "f"$d`Ask);
+            `rteData insert toInsert;
+            runCalc[];
         ];
-
-        / --- CASTING ---
-        / Now we are sure which variable holds what, so casting is safe
-        safeTime: "n"$rawTime;
-        safeSym:  "s"$rawSym;
-        safeBid:  "f"$rawBid;
-        safeAsk:  "f"$rawAsk;
-        
-        / --- INSERT ---
-        toInsert: flip `time`sym`Bid`Ask!(safeTime; safeSym; safeBid; safeAsk);
-        `rteData insert toInsert;
-        
-        / --- CALC ---
-        runCalc[];
 
     };(t;x);{[err] 
         -1 "!!! [UPD CRASHED] ",err;
@@ -131,4 +141,4 @@ if[not null h;
     h(".u.sub";`chunkStoreKalmanPfillDRA; `);
 ];
 
--1 "RTE Ready. Auto-Swap Mode.";
+-1 "RTE Ready. Structure Scanner Mode.";
