@@ -1,7 +1,24 @@
-/ rte.q - Real Time Engine (Unthrottled & Verbose)
+/ rte.q - Real Time Engine (Sniffer & Debug Mode)
 
 / 0. Map .u.upd to upd
 .u.upd:upd;
+
+/ --- DEBUG TOOLS ---
+
+/ 1. Heartbeat
+/ Prints every 5 seconds to prove the process is running
+.z.ts:{ -1 "[RTE] Alive... Waiting for data."; };
+\t 5000
+
+/ 2. Message Sniffer
+/ Captures EVERYTHING sent to this process.
+/ If this prints nothing, the TP is NOT sending data.
+.z.ps:{[x]
+    -1 "[SNIFFER] Received msg: ",(-3!x);
+    value x; / Execute it normally
+ };
+
+/ -------------------
 
 / 1. Define Schemas
 chunkStoreKalmanPfillDRA:([]
@@ -17,42 +34,36 @@ liveAvgTable:([sym:`symbol$()]
     avgAsk:`float$()
  );
 
-/ 2. Analytics Function (With Verbose Debugging)
+/ 2. Analytics Function
 getBidAskAvg:{[st;et;granularity;s]
-    / -1 "   [CALC STEP] 1. Function called. Range: ",(-3!st)," to ",(-3!et);
-    
     s:(),s;
-    if[0=count s; -1 "   [CALC WARNING] No symbols provided."; :()];
+    if[0=count s; :()];
     
     cnt:1+"j"$(et-st)%granularity;
-    if[cnt<1; -1 "   [CALC WARNING] Time window invalid."; :()];
+    if[cnt<1; :()];
 
     times:st+granularity*til cnt;
     grid: ([] sym:s) cross ([] time:times);
-    / -1 "   [CALC STEP] 2. Grid generated. Rows: ",string count grid;
     
     raw:select sym, time, Bid, Ask from chunkStoreKalmanPfillDRA 
         where sym in s, time within (st;et);
-    / -1 "   [CALC STEP] 3. Raw Data Selected. Rows: ",string count raw;
-    
-    if[0=count raw; -1 "   [CALC WARNING] No raw data found in this window! (Check timestamps)"];
+
+    if[0=count raw; :()];
 
     joined:aj[`sym`time; grid; `sym`time xasc raw];
-    / -1 "   [CALC STEP] 4. Join Complete. Rows: ",string count joined;
-
     res:select avgBid:avg Bid, avgAsk:avg Ask by sym from joined;
     :res
  };
 
-/ 3. Upd Function (Unthrottled)
+/ 3. Upd Function
 upd:{[t;x]
-    / Attempt Insert
+    -1 ">> upd CALLED on table: ",string t;
+
     @[{
         / Slice first 4 columns (Time, Sym, Bid, Ask)
         toInsert: 4#y;
         `chunkStoreKalmanPfillDRA insert toInsert;
         
-        / Run Calc immediately on every tick
         runCalc[];
 
     };(t;x);{[err] -1 "   [INSERT FAIL] ",err}];
@@ -61,16 +72,9 @@ upd:{[t;x]
 / 4. Calculation Trigger
 runCalc:{
     @[{
-        / Find the latest time in our data
         now: exec max time from chunkStoreKalmanPfillDRA;
+        if[null now; :()];
         
-        / Safety check: If table is empty, now is null
-        if[null now; 
-            -1 "   [CALC FAIL] Table chunkStoreKalmanPfillDRA is empty!"; 
-            :()
-        ];
-        
-        / Define 60s window relative to DATA TIME
         st: now - 00:01:00.000;    
         syms: distinct chunkStoreKalmanPfillDRA`sym;
         
@@ -96,4 +100,4 @@ if[not null h;
     h(".u.sub";`chunkStoreKalmanPfillDRA; `);
 ];
 
--1 "RTE Ready. UNTHROTTLED Mode active.";
+-1 "RTE Ready. Sniffer Active.";
