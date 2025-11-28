@@ -1,14 +1,17 @@
-/ rte.q - Real Time Engine (Force Cast Fix)
+/ rte.q - Real Time Engine (Positional Force Cast)
 
 / 0. Map .u.upd to upd
 .u.upd:upd;
 
 / --- DEBUG TOOLS ---
 .z.ts:{ -1 "[RTE] Alive... Waiting for data."; };
-\t 5000
+\t 10000
 / -------------------
 
-/ 1. Define Schemas
+/ 1. Clean Slate & Define Schema
+/ Ensure we delete any old definitions that might have mismatched types
+delete chunkStoreKalmanPfillDRA from `.;
+
 chunkStoreKalmanPfillDRA:([]
     time:`timespan$();
     sym:`symbol$();
@@ -43,24 +46,38 @@ getBidAskAvg:{[st;et;granularity;s]
     :res
  };
 
-/ 3. Upd Function (Force Cast Fix)
+/ 3. Upd Function (The Heavy Hammer Fix)
 upd:{[t;x]
     @[{
-        / Handle Table (Type 98) vs List
-        toInsert: $[98=type x;
-            / FORCE CAST ALL COLUMNS to match schema exactly
-            / This solves the 'type' error if Bid/Ask are ints or Sym is string
-            select time:"n"$time, sym:"s"$sym, Bid:"f"$Bid, Ask:"f"$Ask from x;
-            
-            / Else (List Input fallback)
-            flip `time`sym`Bid`Ask!("n";"s";"f";"f")$\:(4#x)
-        ];
+        / A. DECONSTRUCT: Get raw list of columns (Values)
+        / This ignores column names entirely, preventing name mismatch errors.
+        / If x is a table, value flip x gives (col0; col1; col2...)
+        / If x is a list, it is already (col0; col1; col2...)
+        v: $ [98=type x; value flip x; x];
 
+        / B. FORCE CAST BY POSITION
+        / We assume: Col 0 = Time, Col 1 = Sym, Col 2 = Bid, Col 3 = Ask
+        / We cast them explicitly to match our local schema types.
+        
+        cTime: "n"$ v 0;  / Cast to Timespan (fixes Timestamp issues)
+        cSym:  "s"$ v 1;  / Cast to Symbol   (fixes String issues)
+        cBid:  "f"$ v 2;  / Cast to Float    (fixes Int/Long issues)
+        cAsk:  "f"$ v 3;  / Cast to Float
+        
+        / C. REBUILD
+        / Create a clean table with guaranteed names and types
+        toInsert: flip `time`sym`Bid`Ask!(cTime; cSym; cBid; cAsk);
+
+        / D. INSERT
         `chunkStoreKalmanPfillDRA insert toInsert;
         
+        / E. CALC
         runCalc[];
 
-    };(t;x);{[err] -1 "   [INSERT FAIL] ",err}];
+    };(t;x);{[err] 
+        -1 "   [INSERT FAIL] ",err; 
+        -1 "   >> TIP: Check if your feed is sending Time/Sym/Bid/Ask in that order.";
+    }];
  };
 
 / 4. Calculation Trigger
@@ -94,4 +111,4 @@ if[not null h;
     h(".u.sub";`chunkStoreKalmanPfillDRA; `);
 ];
 
--1 "RTE Ready. Force-Cast Mode Applied.";
+-1 "RTE Ready. Positional Casting Active.";
