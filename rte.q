@@ -1,4 +1,4 @@
-/ rte.q - Real Time Engine (Numeric Scanner Mode)
+/ rte.q - Real Time Engine (Interleaved Unpacker Mode)
 
 / 0. Map .u.upd
 .u.upd:upd;
@@ -48,68 +48,77 @@ getBidAskAvg:{[st;et;granularity;s]
     :res
  };
 
-/ 4. Upd Function (The Fix: Broad Numeric Support)
+/ 4. Upd Function (The Fix: Interleaved Unpacker)
 upd:{[t;x]
     @[{
-        / --- A. SCAN STRUCTURE ---
-        if[0=type x;
-             types: type each x;
-             
-             / PRINT TYPES FOR DEBUGGING
-             -1 "   [SCAN] Incoming Types: ",(-3!5#types);
-             
-             / --- B. DYNAMIC MAPPING ---
-             / Find Sym (Type -11)
-             idxSym: first where types = -11h;
-             
-             / Find Time (Types -19, -16, -12)
-             idxTime: first where types within -19 -12h; 
-             
-             / Find NUMERICS (Types -9 (float), -8 (real), -7 (long), -6 (int))
-             / We look for the first two numeric columns that AREN'T the time column
-             isNumeric: types within -9 -6h;
-             
-             / Exclude indices we already identified as Time (just in case time looks numeric)
-             if[not null idxTime; isNumeric[idxTime]: 0b];
-             
-             floatIndices: where isNumeric;
-             idxBid: floatIndices 0;
-             idxAsk: floatIndices 1;
-             
-             / --- C. EXTRACTION ---
-             if[null idxSym; -1 "!!! [ERROR] No Symbol column found."; :()];
-             valSym: x idxSym;
-             
-             if[not null idxTime; valTime: x idxTime];
-             if[null idxTime; valTime: .z.p];
-             
-             if[any null (idxBid; idxAsk); 
-                 -1 "!!! [ERROR] Could not find 2 Numeric columns for Bid/Ask."; 
-                 -1 "    (Looking for types -9, -8, -7, -6)";
-                 :();
-             ];
-             valBid: x idxBid;
-             valAsk: x idxAsk;
-             
-             / --- D. CAST & INSERT ---
-             safeTime: "n"$valTime;
-             safeSym:  "s"$valSym;
-             safeBid:  "f"$valBid;
-             safeAsk:  "f"$valAsk;
-             
-             toInsert: flip `time`sym`Bid`Ask!(safeTime; safeSym; safeBid; safeAsk);
-             `rteData insert toInsert;
-             runCalc[];
-             :();
+        / --- A. DETECT STRUCTURE ---
+        typ: type x;
+        sourceTable: ();
+        
+        / CASE 1: Interleaved List (-11 98 -11 98...)
+        / Check if it's a list (0) and the second item is a table (98)
+        isInterleaved: (0=typ) and (98=type x 1);
+        
+        if[isInterleaved;
+            -1 "   [TRACE] Detected Interleaved List (Sym; Table; Sym; Table...)";
+            
+            / Extract Symbols (Indices 0, 2, 4...)
+            cnt: count x;
+            idxSyms: 2*til cnt div 2;
+            syms: x idxSyms;
+            
+            / Extract Tables (Indices 1, 3, 5...)
+            idxTabs: 1 + 2*til cnt div 2;
+            tabs: x idxTabs;
+            
+            / Merge Tables
+            / We raze the list of tables into one big table
+            merged: raze tabs;
+            
+            / Stitch Symbols
+            / We assume each table corresponds to one symbol.
+            / If the table rows don't have 'sym', we add it from our 'syms' list.
+            if[not `sym in cols merged;
+                merged: update sym:syms from merged
+            ];
+            
+            sourceTable: merged;
+        ];
+
+        / CASE 2: Standard Table (98)
+        if[98=typ; 
+            -1 "   [TRACE] Detected Standard Table.";
+            sourceTable: x
         ];
         
-        / Fallback for Tables (Type 98)
-        if[98=type x;
-            d: flip x;
-            toInsert: flip `time`sym`Bid`Ask!("n"$d`time; "s"$d`sym; "f"$d`Bid; "f"$d`Ask);
-            `rteData insert toInsert;
-            runCalc[];
+        / CASE 3: Standard List (Columns)
+        if[0=typ and not isInterleaved;
+             -1 "   [TRACE] Detected Standard List of Columns.";
+             / Try to flip it to a table, assuming standard structure
+             sourceTable: flip `time`sym`Bid`Ask!(x 0; x 1; x 2; x 3);
         ];
+
+        if[0=count sourceTable;
+             -1 "!!! [ERROR] Could not unpack data. Type: ",string typ;
+             :();
+        ];
+
+        / --- B. SELECT & CAST ---
+        / Now we have a 'sourceTable', we just need to normalize types
+        -1 "   [TRACE] Normalizing Table...";
+        
+        / Select only what we need (tolerant of extra cols)
+        d: select time, sym, Bid, Ask from sourceTable;
+        
+        / Force Cast
+        d: update "n"$time, "s"$sym, "f"$Bid, "f"$Ask from d;
+        
+        / --- C. INSERT ---
+        `rteData insert d;
+        -1 "   [TRACE] Inserted ",string[count d]," rows.";
+        
+        / --- D. CALC ---
+        runCalc[];
 
     };(t;x);{[err] 
         -1 "!!! [UPD CRASHED] ",err;
@@ -145,4 +154,4 @@ if[not null h;
     h(".u.sub";`chunkStoreKalmanPfillDRA; `);
 ];
 
--1 "RTE Ready. Numeric Scanner Mode.";
+-1 "RTE Ready. Interleaved Unpacker Mode.";
