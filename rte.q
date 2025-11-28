@@ -1,32 +1,23 @@
-/ rte.q - Real Time Engine (Manual Dispatch Mode)
+/ rte.q - Real Time Engine (Deconstruction Mode)
 
-/ 0. Map .u.upd to upd (Just in case)
+/ 0. Map .u.upd to upd
 .u.upd:upd;
 
 / --- DEBUG TOOLS ---
 .z.ts:{ -1 "[RTE] Alive..."; };
 \t 10000
 
-/ 1. MANUAL DISPATCHER (.z.ps)
-/ This is the specific fix for your issue.
-/ We intercept the message and call upd() manually.
+/ 1. MANUAL DISPATCHER
 .z.ps:{[x]
-    / Check if the message is a list starting with `upd or `.u.upd
     func: first x;
-    
-    / Dispatch Logic
     if[func in `upd`.u.upd;
-        -1 ">> [SNIFFER] Manually dispatching 'upd' message...";
-        / x[1] is table name, x[2] is data
+        -1 ">> [SNIFFER] Dispatching 'upd'...";
         upd[x 1; x 2];
         :();
     ];
-
-    / Fallback for other messages
-    -1 "[SNIFFER] Received non-upd msg: ",(-3!x);
+    -1 "[SNIFFER] Non-upd msg: ",(-3!x);
     value x; 
  };
-/ -------------------
 
 / 2. Define Schema
 delete rteData from `.;
@@ -64,26 +55,39 @@ getBidAskAvg:{[st;et;granularity;s]
     :res
  };
 
-/ 4. Upd Function
+/ 4. Upd Function (The Fix: Deconstruction)
 upd:{[t;x]
-    / Print entry immediately
-    -1 ">> upd CALLED (Manual Dispatch). Rows: ",string count x;
+    -1 ">> upd CALLED. Input Type: ",string type x;
 
     @[{
-        / 1. SELECT & CAST
-        / Extract only the 4 cols we need from the big table
-        d: select time, sym, Bid, Ask from x;
-        d: update "n"$time, "s"$sym, "f"$Bid, "f"$Ask from d;
+        / A. DECONSTRUCT
+        / Convert Table (98) or Flip (99) into a pure Dictionary
+        / If x is a table, 'flip x' gives a dictionary of cols.
+        / If x is already a dictionary, we just use x.
+        d: $ [98=type x; flip x; x];
 
-        / 2. INSERT
-        `rteData insert d;
-        -1 "   [TRACE] Inserted ",string[count d]," rows.";
+        / B. EXTRACT & CAST (Low-Level)
+        / We pull columns directly by name. No Q-SQL.
+        / This avoids 'type' errors associated with 'update' syntax.
+        cTime: "n"$ d`time;
+        cSym:  "s"$ d`sym;
+        cBid:  "f"$ d`Bid;
+        cAsk:  "f"$ d`Ask;
 
-        / 3. CALC
+        / C. REBUILD
+        / Construct a guaranteed clean table
+        toInsert: flip `time`sym`Bid`Ask!(cTime; cSym; cBid; cAsk);
+
+        / D. INSERT
+        `rteData insert toInsert;
+        -1 "   [TRACE] Inserted ",string[count toInsert]," rows.";
+
+        / E. CALC
         runCalc[];
 
     };(t;x);{[err] 
         -1 "!!! [UPD CRASHED] ",err;
+        -1 "   >> Input x structure keys: ",(-3!keys flip x);
     }];
  };
 
@@ -116,4 +120,4 @@ if[not null h;
     h(".u.sub";`chunkStoreKalmanPfillDRA; `);
 ];
 
--1 "RTE Ready. Manual Dispatch Mode.";
+-1 "RTE Ready. Deconstruction Mode.";
