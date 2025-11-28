@@ -1,17 +1,18 @@
-/ rte.q - Real Time Engine (Throttled / Async Mode)
+/ rte.q - Real Time Engine (5-Minute Interval Mode)
 
 / 0. Map .u.upd
 .u.upd:upd;
 
 / --- CONFIG ---
-/ Run Calculation every 1000ms (1 second)
-/ This prevents CPU starvation / Console Freezing
+/ Run Calculation every 300,000ms (5 minutes)
+/ This completely stops the "infinite execution" console spam.
 .z.ts:{ 
+    -1 "[RTE] 5-minute timer fired. Running Calc...";
     runCalc[]; 
-    / Optional: Print a dot to show life, or keep silent
-    / -1 "."; 
  };
-\t 1000
+
+/ Set timer to 5 minutes
+\t 300000
 
 / 1. MANUAL DISPATCHER
 .z.ps:{[x]
@@ -55,7 +56,7 @@ getBidAskAvg:{[st;et;granularity;s]
  };
 
 / 4. Upd Function (Insert Only - High Performance)
-/ We removed runCalc[] from here to prevent Livelock.
+/ NO CALCULATIONS HERE. Pure data ingestion.
 upd:{[t;x]
     @[{
         typ: type x;
@@ -93,17 +94,16 @@ upd:{[t;x]
         
         `rteData insert d;
         
-        / NO CALC HERE. 
-        / We let .z.ts handle it asynchronously.
-
     };(t;x);{[err] -1 "!!! [UPD ERROR] ",err}];
  };
 
-/ 5. Calculation Trigger (Called by Timer)
+/ 5. Calculation Trigger (Called by Timer every 5 mins)
 runCalc:{
     @[{
         now: exec max time from rteData;
         if[null now; :()];
+        
+        / Window: Last 60 seconds of data
         st: now - 00:01:00.000;    
         syms: distinct rteData`sym;
         
@@ -112,6 +112,10 @@ runCalc:{
         if[count result;
             result: update time:now from result;
             `liveAvgTable upsert result;
+            
+            -1 ">> SUCCESS. Live Table Updated @ ",string[.z.t];
+            show liveAvgTable;
+            -1 "------------------------------------------------";
         ];
     };(::);{[err] -1 "!!! [CALC ERROR] ",err}];
  };
@@ -125,4 +129,4 @@ if[not null h;
     h(".u.sub";`chunkStoreKalmanPfillDRA; `);
 ];
 
--1 "RTE Ready. Throttled Mode (1s Updates).";
+-1 "RTE Ready. Updates every 5 minutes.";
