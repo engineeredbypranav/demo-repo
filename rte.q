@@ -1,18 +1,18 @@
-/ rte.q - Real Time Engine (Positional Force Cast)
+/ rte.q - Real Time Engine (Final Diagnostic)
 
-/ 0. Map .u.upd to upd
+/ 0. Map .u.upd
 .u.upd:upd;
 
 / --- DEBUG TOOLS ---
-.z.ts:{ -1 "[RTE] Alive... Waiting for data."; };
+.z.ts:{ -1 "[RTE] Alive..."; };
 \t 10000
 / -------------------
 
-/ 1. Clean Slate & Define Schema
-/ Ensure we delete any old definitions that might have mismatched types
-delete chunkStoreKalmanPfillDRA from `.;
+/ 1. Nuke & Define Schema
+/ We delete the table first to ensure a fresh definition
+delete rteData from `.;
 
-chunkStoreKalmanPfillDRA:([]
+rteData:([]
     time:`timespan$();
     sym:`symbol$();
     Bid:`float$();
@@ -36,7 +36,7 @@ getBidAskAvg:{[st;et;granularity;s]
     times:st+granularity*til cnt;
     grid: ([] sym:s) cross ([] time:times);
     
-    raw:select sym, time, Bid, Ask from chunkStoreKalmanPfillDRA 
+    raw:select sym, time, Bid, Ask from rteData 
         where sym in s, time within (st;et);
 
     if[0=count raw; :()];
@@ -46,60 +46,59 @@ getBidAskAvg:{[st;et;granularity;s]
     :res
  };
 
-/ 3. Upd Function (The Heavy Hammer Fix)
+/ 3. Upd Function (Step-by-Step)
 upd:{[t;x]
+    
+    / --- STEP 1: PREPARE DATA ---
+    / We do this outside the trap to see if SELECT fails
+    d: select time, sym, Bid, Ask from x;
+    
+    / Force clean types based on your META screenshot
+    d: update "n"$time, "s"$sym, "f"$Bid, "f"$Ask from d;
+
+    / --- STEP 2: INSERT (Trap A) ---
+    inserted: 0b;
     @[{
-        / A. DECONSTRUCT: Get raw list of columns (Values)
-        / This ignores column names entirely, preventing name mismatch errors.
-        / If x is a table, value flip x gives (col0; col1; col2...)
-        / If x is a list, it is already (col0; col1; col2...)
-        v: $ [98=type x; value flip x; x];
-
-        / B. FORCE CAST BY POSITION
-        / We assume: Col 0 = Time, Col 1 = Sym, Col 2 = Bid, Col 3 = Ask
-        / We cast them explicitly to match our local schema types.
-        
-        cTime: "n"$ v 0;  / Cast to Timespan (fixes Timestamp issues)
-        cSym:  "s"$ v 1;  / Cast to Symbol   (fixes String issues)
-        cBid:  "f"$ v 2;  / Cast to Float    (fixes Int/Long issues)
-        cAsk:  "f"$ v 3;  / Cast to Float
-        
-        / C. REBUILD
-        / Create a clean table with guaranteed names and types
-        toInsert: flip `time`sym`Bid`Ask!(cTime; cSym; cBid; cAsk);
-
-        / D. INSERT
-        `chunkStoreKalmanPfillDRA insert toInsert;
-        
-        / E. CALC
-        runCalc[];
-
-    };(t;x);{[err] 
-        -1 "   [INSERT FAIL] ",err; 
-        -1 "   >> TIP: Check if your feed is sending Time/Sym/Bid/Ask in that order.";
+        `rteData insert y;
+        inserted::1b;
+    };(t;d);{[err] 
+        -1 "!!! [INSERT FAIL] ",err;
+        -1 "   >> Meta of Data trying to insert:";
+        show meta d;
+        -1 "   >> Meta of Target Table (rteData):";
+        show meta rteData;
     }];
+
+    / --- STEP 3: CALC (Trap B) ---
+    / Only run if insert succeeded
+    if[inserted;
+        @[{
+            runCalc[];
+        };(::);{[err] -1 "!!! [CALC FAIL] ",err}];
+    ];
  };
 
 / 4. Calculation Trigger
 runCalc:{
-    @[{
-        now: exec max time from chunkStoreKalmanPfillDRA;
-        if[null now; :()];
+    now: exec max time from rteData;
+    if[null now; :()];
+    
+    st: now - 00:01:00.000;    
+    syms: distinct rteData`sym;
+    
+    result: getBidAskAvg[st; now; 00:00:01.000; syms];
+    
+    if[count result;
+        / CRITICAL: Ensure 'time' col is added before upsert
+        result: update time:now from result;
         
-        st: now - 00:01:00.000;    
-        syms: distinct chunkStoreKalmanPfillDRA`sym;
+        / UPSERT
+        `liveAvgTable upsert result;
         
-        result: getBidAskAvg[st; now; 00:00:01.000; syms];
-        
-        if[count result;
-            result: update time:now from result;
-            `liveAvgTable upsert result;
-            
-            -1 ">> SUCCESS. Live Table Updated (Rows: ",string[count result],")";
-            show liveAvgTable;
-            -1 "------------------------------------------------";
-        ];
-    };(::);{ -1 "   [CALC CRASH] ",x }];
+        -1 ">> SUCCESS. Live Table Updated (Rows: ",string[count result],")";
+        show liveAvgTable;
+        -1 "------------------------------------------------";
+    ];
  };
 
 / 5. Connection
@@ -111,4 +110,4 @@ if[not null h;
     h(".u.sub";`chunkStoreKalmanPfillDRA; `);
 ];
 
--1 "RTE Ready. Positional Casting Active.";
+-1 "RTE Ready. Split-Trap Mode.";
