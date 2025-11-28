@@ -1,4 +1,4 @@
-/ rte.q - Real Time Engine (Forensic Cast Mode)
+/ rte.q - Real Time Engine (Auto-Swap Mode)
 
 / 0. Map .u.upd
 .u.upd:upd;
@@ -11,11 +11,9 @@
 .z.ps:{[x]
     func: first x;
     if[func in `upd`.u.upd;
-        -1 ">> [SNIFFER] Dispatching 'upd'...";
         upd[x 1; x 2];
         :();
     ];
-    -1 "[SNIFFER] Non-upd msg: ",(-3!x);
     value x; 
  };
 
@@ -50,28 +48,34 @@ getBidAskAvg:{[st;et;granularity;s]
     :res
  };
 
-/ 4. Upd Function (Forensic Trace)
+/ 4. Upd Function (The Fix: Auto-Swap)
 upd:{[t;x]
-    -1 ">> upd CALLED. Rows/Cols: ",string count x;
-    
-    / Capture raw message for inspection
-    lastRawMsg::x;
-
     @[{
-        -1 "   [TRACE] 1. Extracting Input...";
         typ: type x;
         
-        / --- BRANCH LOGIC ---
+        / --- UNPACK LOGIC ---
         if[typ=0h; 
-            -1 "   [TRACE]    >> PATH: LIST (By Index)";
-            rawTime: x 0;
-            rawSym:  x 1;
+            / Check type of FIRST item to determine order
+            / -11h = Symbol, -16h/-12h = Time
+            isSymFirst: -11h = type x 0;
+
+            if[isSymFirst;
+                / -1 "   [TRACE] Detected (Sym; Time...) order. Swapping.";
+                rawSym:  x 0;
+                rawTime: x 1;
+            ];
+            
+            if[not isSymFirst;
+                / -1 "   [TRACE] Detected (Time; Sym...) order.";
+                rawTime: x 0;
+                rawSym:  x 1;
+            ];
+
             rawBid:  x 2;
             rawAsk:  x 3;
         ];
         
         if[typ=98h;
-            -1 "   [TRACE]    >> PATH: TABLE (By Name)";
             d: flip x;
             rawTime: d`time;
             rawSym:  d`sym;
@@ -79,37 +83,22 @@ upd:{[t;x]
             rawAsk:  d`Ask;
         ];
 
-        -1 "   [TRACE] 2. Forensic Casting...";
-
-        / A. TIME
-        -1 "   [TRACE]    2a. Casting TIME. Incoming Type: ",string[type rawTime];
+        / --- CASTING ---
+        / Now we are sure which variable holds what, so casting is safe
         safeTime: "n"$rawTime;
-        -1 "   [TRACE]        >> Success.";
-
-        / B. SYM
-        -1 "   [TRACE]    2b. Casting SYM. Incoming Type: ",string[type rawSym];
-        safeSym: "s"$rawSym;
-        -1 "   [TRACE]        >> Success.";
-
-        / C. BID
-        -1 "   [TRACE]    2c. Casting BID. Incoming Type: ",string[type rawBid];
-        safeBid: "f"$rawBid;
-        -1 "   [TRACE]        >> Success.";
-
-        / D. ASK
-        -1 "   [TRACE]    2d. Casting ASK. Incoming Type: ",string[type rawAsk];
-        safeAsk: "f"$rawAsk;
-        -1 "   [TRACE]        >> Success.";        
-        -1 "   [TRACE] 3. Inserting...";
+        safeSym:  "s"$rawSym;
+        safeBid:  "f"$rawBid;
+        safeAsk:  "f"$rawAsk;
+        
+        / --- INSERT ---
         toInsert: flip `time`sym`Bid`Ask!(safeTime; safeSym; safeBid; safeAsk);
         `rteData insert toInsert;
         
-        -1 "   [TRACE] 4. Done. Running Calc...";
+        / --- CALC ---
         runCalc[];
 
     };(t;x);{[err] 
         -1 "!!! [UPD CRASHED] ",err;
-        -1 "   >> TIP: The crash happened immediately after the last [TRACE] message.";
     }];
  };
 
@@ -142,4 +131,4 @@ if[not null h;
     h(".u.sub";`chunkStoreKalmanPfillDRA; `);
 ];
 
--1 "RTE Ready. Forensic Cast Mode.";
+-1 "RTE Ready. Auto-Swap Mode.";
