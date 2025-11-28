@@ -1,7 +1,10 @@
-/ rte.q - Real Time Engine (Inspector Mode)
+/ rte.q - Real Time Engine (Throttled & Verbose)
 
-/ 0. Map .u.upd to upd (Just in case)
+/ 0. Map .u.upd to upd
 .u.upd:upd;
+
+/ Global Counter to throttle logs
+updCtr:0;
 
 / 1. Define Schemas
 chunkStoreKalmanPfillDRA:([]
@@ -17,77 +20,82 @@ liveAvgTable:([sym:`symbol$()]
     avgAsk:`float$()
  );
 
-/ 2. Analytics Function
+/ 2. Analytics Function (With Verbose Debugging)
 getBidAskAvg:{[st;et;granularity;s]
+    -1 "   [CALC STEP] 1. Function called. Range: ",(-3!st)," to ",(-3!et);
+    
     s:(),s;
-    if[0=count s; :([] sym:`symbol$(); avgBid:`float$(); avgAsk:`float$())];
+    if[0=count s; -1 "   [CALC WARNING] No symbols provided."; :()];
+    
     cnt:1+"j"$(et-st)%granularity;
-    if[cnt<1; :([] sym:`symbol$(); avgBid:`float$(); avgAsk:`float$())];
+    if[cnt<1; -1 "   [CALC WARNING] Time window invalid."; :()];
 
     times:st+granularity*til cnt;
     grid: ([] sym:s) cross ([] time:times);
+    -1 "   [CALC STEP] 2. Grid generated. Rows: ",string count grid;
     
     raw:select sym, time, Bid, Ask from chunkStoreKalmanPfillDRA 
         where sym in s, time within (st;et);
+    -1 "   [CALC STEP] 3. Raw Data Selected. Rows: ",string count raw;
     
+    if[0=count raw; -1 "   [CALC WARNING] No raw data found in this window! (Check timestamps)"];
+
     joined:aj[`sym`time; grid; `sym`time xasc raw];
+    -1 "   [CALC STEP] 4. Join Complete. Rows: ",string count joined;
+
     res:select avgBid:avg Bid, avgAsk:avg Ask by sym from joined;
     :res
  };
 
-/ 3. Upd Function (INSPECTOR MODE)
-/ This will NOT crash. It will just tell us what the data looks like.
+/ 3. Upd Function (Throttled)
 upd:{[t;x]
-    lastRawMsg::x;
-
-    -1 ">> upd RECEIVED on table: ",string t;
-
-    / Check if x is a table or a list of columns
-    isTable: 98=type x;
+    / Increment counter
+    updCtr+:1;
     
-    / Normalize data to a list of columns 'd'
-    d: $ [isTable; value flip x; x];
-
-    / INSPECTION LOGIC
-    / Print the Type of each column
-    -1 "   [TYPES]   ",(-3!type each d);
-    
-    / Print the First Item of each column (Sample Data)
-    / This lets us see "Ah, column 0 is a Symbol, column 1 is Time"
-    safeSample: {[c] $[count c; first c; "empty"]};
-    -1 "   [SAMPLE]  ",(-3!safeSample each d);
-
-    / SAFETY INSERT
-    / We attempt to slice first 4 cols, but we won't cast blindly.
-    / If schema matches, it inserts. If not, it prints error but keeps running.
+    / Attempt Insert
     @[{
+        / Slice first 4 columns (Time, Sym, Bid, Ask)
         toInsert: 4#y;
         `chunkStoreKalmanPfillDRA insert toInsert;
         
-        / If insert worked, run calc
-        runCalc[];
-        
-    };(t;d);{[err] -1 "   [INSERT FAIL] ",err}];
-    
-    -1 "------------------------------------------------";
+        / ONLY Run Calc every 50 updates to prevent console flooding
+        if[0 = (updCtr mod 50);
+            -1 ">> upd #",string[updCtr]," received. Running Calc...";
+            runCalc[];
+        ];
+
+    };(t;x);{[err] -1 "   [INSERT FAIL] ",err}];
  };
 
 / 4. Calculation Trigger
 runCalc:{
     @[{
+        / Find the latest time in our data
         now: exec max time from chunkStoreKalmanPfillDRA;
-        if[null now; now:.z.n];
+        
+        / Safety check: If table is empty, now is null
+        if[null now; 
+            -1 "   [CALC FAIL] Table chunkStoreKalmanPfillDRA is empty!"; 
+            :()
+        ];
+        
+        / Define 60s window relative to DATA TIME
         st: now - 00:01:00.000;    
         syms: distinct chunkStoreKalmanPfillDRA`sym;
+        
+        -1 "   [CALC STEP] 0. Symbols found in table: ",string count syms;
         
         result: getBidAskAvg[st; now; 00:00:01.000; syms];
         
         if[count result;
             result: update time:now from result;
             `liveAvgTable upsert result;
-            -1 "   >> SUCCESS: liveAvgTable updated. Rows: ",string count result;
+            
+            -1 ">> SUCCESS. Live Table Updated:";
+            show liveAvgTable;
+            -1 "------------------------------------------------";
         ];
-    };(::);{ -1 "   [CALC FAIL] ",x }];
+    };(::);{ -1 "   [CALC CRASH] ",x }];
  };
 
 / 5. Connection
@@ -99,4 +107,4 @@ if[not null h;
     h(".u.sub";`chunkStoreKalmanPfillDRA; `);
 ];
 
--1 "RTE Ready. Inspecting Data Structure...";
+-1 "RTE Ready. Throttled Output (Every 50 ticks).";
