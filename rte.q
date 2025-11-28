@@ -1,4 +1,4 @@
-/ rte.q - Real Time Engine (Atomic Trace Mode)
+/ rte.q - Real Time Engine (Universal Unpacker)
 
 / 0. Map .u.upd
 .u.upd:upd;
@@ -50,50 +50,50 @@ getBidAskAvg:{[st;et;granularity;s]
     :res
  };
 
-/ 4. Upd Function (Atomic Trace)
+/ 4. Upd Function (The Fix)
 upd:{[t;x]
-    -1 ">> upd CALLED. Rows: ",string count x;
+    -1 ">> upd CALLED. Rows/Cols: ",string count x;
 
     @[{
-        -1 "   [TRACE] 1. Extracting columns by INDEX (0,1,2,3)...";
-        / Get column names dynamically to avoid typo/whitespace issues
-        c: cols x;
-        -1 "   [TRACE]    Col 0 Name: ",string[c 0];
-        -1 "   [TRACE]    Col 1 Name: ",string[c 1];
-        
-        / Extract raw columns using Table Indexing (safe for Tables)
-        rawTime: x[c 0];
-        rawSym:  x[c 1];
-        rawBid:  x[c 2];
-        rawAsk:  x[c 3];
-        
-        -1 "   [TRACE] 2. Checking Raw Types...";
-        -1 "   [TRACE]    Time Type: ",string type rawTime;
-        -1 "   [TRACE]    Sym Type:  ",string type rawSym;
-        -1 "   [TRACE]    Bid Type:  ",string type rawBid;
-        -1 "   [TRACE]    Ask Type:  ",string type rawAsk;
+        -1 "   [TRACE] 1. Detecting Input Type...";
+        typ: type x;
+        -1 "   [TRACE]    Type is: ",string typ;
 
-        -1 "   [TRACE] 3. Casting...";
-        / Cast individually - if this fails, we know WHICH col is bad
+        / --- BRANCH LOGIC ---
+        if[typ=0h; 
+            -1 "   [TRACE]    >> PATH: LIST (By Index)";
+            rawTime: x 0;
+            rawSym:  x 1;
+            rawBid:  x 2;
+            rawAsk:  x 3;
+        ];
+        
+        if[typ=98h;
+            -1 "   [TRACE]    >> PATH: TABLE (By Name)";
+            / Convert to dictionary to extract cols safe
+            d: flip x;
+            rawTime: d`time;
+            rawSym:  d`sym;
+            rawBid:  d`Bid;
+            rawAsk:  d`Ask;
+        ];
+        
+        if[not typ within (0h; 98h);
+            -1 "!!! [ERROR] Unknown data type: ",string typ;
+            :();
+        ];
+
+        -1 "   [TRACE] 2. Force Casting...";
         safeTime: "n"$rawTime;
-        -1 "   [TRACE]    Time Cast OK";
-        
         safeSym:  "s"$rawSym;
-        -1 "   [TRACE]    Sym Cast OK";
-        
         safeBid:  "f"$rawBid;
-        -1 "   [TRACE]    Bid Cast OK";
-        
         safeAsk:  "f"$rawAsk;
-        -1 "   [TRACE]    Ask Cast OK";
         
-        -1 "   [TRACE] 4. Rebuilding Table...";
+        -1 "   [TRACE] 3. Rebuilding & Inserting...";
         toInsert: flip `time`sym`Bid`Ask!(safeTime; safeSym; safeBid; safeAsk);
-        
-        -1 "   [TRACE] 5. Inserting...";
         `rteData insert toInsert;
         
-        -1 "   [TRACE] 6. Done. Running Calc...";
+        -1 "   [TRACE] 4. Done. Running Calc...";
         runCalc[];
 
     };(t;x);{[err] 
@@ -130,4 +130,4 @@ if[not null h;
     h(".u.sub";`chunkStoreKalmanPfillDRA; `);
 ];
 
--1 "RTE Ready. Atomic Trace Mode.";
+-1 "RTE Ready. Universal Unpacker Mode.";
