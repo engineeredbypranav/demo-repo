@@ -1,4 +1,4 @@
-/ rte.q - Real Time Engine (Structure Scanner Mode)
+/ rte.q - Real Time Engine (Numeric Scanner Mode)
 
 / 0. Map .u.upd
 .u.upd:upd;
@@ -48,14 +48,15 @@ getBidAskAvg:{[st;et;granularity;s]
     :res
  };
 
-/ 4. Upd Function (The Fix: Scanner & Mapper)
+/ 4. Upd Function (The Fix: Broad Numeric Support)
 upd:{[t;x]
     @[{
         / --- A. SCAN STRUCTURE ---
-        / If it's a list (row), let's look at what we have.
         if[0=type x;
              types: type each x;
-             / -1 "   [SCAN] Types of first 5 items: ",(-3!5#types);
+             
+             / PRINT TYPES FOR DEBUGGING
+             -1 "   [SCAN] Incoming Types: ",(-3!5#types);
              
              / --- B. DYNAMIC MAPPING ---
              / Find Sym (Type -11)
@@ -64,26 +65,29 @@ upd:{[t;x]
              / Find Time (Types -19, -16, -12)
              idxTime: first where types within -19 -12h; 
              
-             / Find Floats (Type -9) for Bid/Ask
-             / We assume the first two floats found are Bid and Ask
-             floatIndices: where types = -9h;
+             / Find NUMERICS (Types -9 (float), -8 (real), -7 (long), -6 (int))
+             / We look for the first two numeric columns that AREN'T the time column
+             isNumeric: types within -9 -6h;
+             
+             / Exclude indices we already identified as Time (just in case time looks numeric)
+             if[not null idxTime; isNumeric[idxTime]: 0b];
+             
+             floatIndices: where isNumeric;
              idxBid: floatIndices 0;
              idxAsk: floatIndices 1;
              
              / --- C. EXTRACTION ---
-             / If we found a Symbol, grab it. Else error.
              if[null idxSym; -1 "!!! [ERROR] No Symbol column found."; :()];
              valSym: x idxSym;
              
-             / If we found a Time, grab it. Else use Local Time.
              if[not null idxTime; valTime: x idxTime];
-             if[null idxTime; 
-                 / -1 "   [WARN] No Time column found. Using Local Time."; 
-                 valTime: .z.p
-             ];
+             if[null idxTime; valTime: .z.p];
              
-             / If we found Floats, grab them.
-             if[any null (idxBid; idxAsk); -1 "!!! [ERROR] Could not find 2 Float columns for Bid/Ask."; :()];
+             if[any null (idxBid; idxAsk); 
+                 -1 "!!! [ERROR] Could not find 2 Numeric columns for Bid/Ask."; 
+                 -1 "    (Looking for types -9, -8, -7, -6)";
+                 :();
+             ];
              valBid: x idxBid;
              valAsk: x idxAsk;
              
@@ -141,4 +145,4 @@ if[not null h;
     h(".u.sub";`chunkStoreKalmanPfillDRA; `);
 ];
 
--1 "RTE Ready. Structure Scanner Mode.";
+-1 "RTE Ready. Numeric Scanner Mode.";
