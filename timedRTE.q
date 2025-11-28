@@ -1,27 +1,27 @@
-/ rte.q - Real Time Engine (Garbage Collector Fix)
+/ rte.q - Real Time Engine (Final Corrected Version)
 
 / 0. Map .u.upd
 .u.upd:upd;
 
 / --- CONFIG ---
+/ Keep 5 minutes of history in memory
 KEEP_WINDOW: 00:05:00.000;
 
-/ Timer: Run cleanup and calc every 1 second
+/ Timer: Run cleanup and calc every 1 second (1000ms)
 \t 1000
 
 / --- TIMER LOGIC ---
 .z.ts:{ 
     / 1. Prune (Garbage Collect)
-    / FIX: Use .z.n (Timespan) instead of .z.p (Timestamp)
-    / This prevents the logic from accidentally deleting all data because
-    / Timestamp (Year 2025) > Timespan (Since Midnight).
+    / CRITICAL FIX: Use .z.n (Timespan) to match table type.
+    / .z.p (Timestamp) would delete everything because 2025 > 09:30.
     cutoff: .z.n - KEEP_WINDOW;
     delete from `rteData where time < cutoff;
     
     / 2. Run Calc
     runCalc[]; 
     
-    / 3. Status Heartbeat
+    / 3. Status Heartbeat (Prints once per second)
     -1 "[STATUS] Time: ",string[.z.t]," | rteData: ",string[count rteData]," rows | liveAvgTable: ",string[count liveAvgTable]," rows";
  };
 
@@ -78,7 +78,7 @@ upd:{[t;x]
         typ: type x;
         sourceTable: ();
         
-        / CASE 1: Interleaved List
+        / CASE 1: Interleaved List (Sym; Table; Sym; Table...)
         isInterleaved: (0=typ) and (count x > 1) and (98=type x 1);
         
         if[isInterleaved;
@@ -117,7 +117,9 @@ runCalc:{
         now: exec max time from rteData;
         if[null now; :()];
         
+        / Window: Last 60 seconds
         st: now - 00:01:00.000;    
+        
         syms: distinct rteData`sym;
         
         result: getBidAskAvg[st; now; 00:00:01.000; syms];
@@ -138,4 +140,4 @@ if[not null h;
     h(".u.sub";`chunkStoreKalmanPfillDRA; `);
 ];
 
--1 "RTE Ready. Bug Fixed (Timespan vs Timestamp).";
+-1 "RTE Ready. Final Corrected Version.";
