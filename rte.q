@@ -1,4 +1,4 @@
-/ rte.q - Real Time Engine (Deconstruction Mode)
+/ rte.q - Real Time Engine (Key Verification Mode)
 
 / 0. Map .u.upd to upd
 .u.upd:upd;
@@ -55,40 +55,54 @@ getBidAskAvg:{[st;et;granularity;s]
     :res
  };
 
-/ 4. Upd Function (The Fix: Deconstruction)
+/ 4. Upd Function (Safest Version Yet)
 upd:{[t;x]
     -1 ">> upd CALLED. Input Type: ",string type x;
 
     @[{
         / A. DECONSTRUCT
-        / Convert Table (98) or Flip (99) into a pure Dictionary
-        / If x is a table, 'flip x' gives a dictionary of cols.
-        / If x is already a dictionary, we just use x.
-        d: $ [98=type x; flip x; x];
+        / Flip table to dictionary. If list, assume standard order.
+        d: $ [98=type x; flip x; 
+              99=type x; x;
+              / If list, map to expected names manually (Hopeful fallback)
+              `time`sym`Bid`Ask!4#x
+           ];
 
-        / B. EXTRACT & CAST (Low-Level)
-        / We pull columns directly by name. No Q-SQL.
-        / This avoids 'type' errors associated with 'update' syntax.
+        / B. VERIFY KEYS
+        / This prevents the 'type' error caused by missing keys returning (::)
+        k: key d;
+        req: `time`sym`Bid`Ask;
+        missing: req where not req in k;
+        
+        if[count missing;
+            -1 "!!! [CRITICAL] MISSING COLUMNS: ",(-3!missing);
+            -1 "   >> Available Keys: ",(-3!k);
+            -1 "   >> ABORTING INSERT.";
+            :();
+        ];
+
+        / C. SAFE CAST
+        / We now know keys exist, so these lookups won't return (::)
         cTime: "n"$ d`time;
         cSym:  "s"$ d`sym;
         cBid:  "f"$ d`Bid;
         cAsk:  "f"$ d`Ask;
 
-        / C. REBUILD
-        / Construct a guaranteed clean table
+        / D. REBUILD & INSERT
         toInsert: flip `time`sym`Bid`Ask!(cTime; cSym; cBid; cAsk);
-
-        / D. INSERT
         `rteData insert toInsert;
         -1 "   [TRACE] Inserted ",string[count toInsert]," rows.";
 
         / E. CALC
         runCalc[];
 
-    };(t;x);{[err] 
+    };(t;x);{[x; err] 
+        / We pass 'x' into the error handler so we can inspect it without crashing
         -1 "!!! [UPD CRASHED] ",err;
-        -1 "   >> Input x structure keys: ",(-3!keys flip x);
-    }];
+        -1 "   >> Input Type: ",string type x;
+        -1 "   >> Is Table? ",string 98=type x;
+        -1 "   >> Columns/Keys found: ",(-3!cols x);
+    }[x;]];
  };
 
 / 5. Calculation Trigger
@@ -120,4 +134,4 @@ if[not null h;
     h(".u.sub";`chunkStoreKalmanPfillDRA; `);
 ];
 
--1 "RTE Ready. Deconstruction Mode.";
+-1 "RTE Ready. Key Verification Mode.";
