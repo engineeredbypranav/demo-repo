@@ -1,9 +1,9 @@
-/ rte.q - Real Time Engine with Diagnostic Capture
+/ rte.q - Real Time Engine with Auto-Discovery
 
 / 0. Map .u.upd
 .u.upd:upd;
 
-/ 1. Define Strict Schema (Target)
+/ 1. Define Schemas
 chunkStoreKalmanPfillDRA:([]
     time:`timespan$();
     sym:`symbol$();
@@ -11,15 +11,8 @@ chunkStoreKalmanPfillDRA:([]
     Ask:`float$()
  );
 
-/ 1b. Define Debug Schema (Accepts Anything)
-debugRaw:([] 
-    c0:(); 
-    c1:(); 
-    c2:(); 
-    c3:()
- );
+debugRaw:([] c0:(); c1:(); c2:(); c3:());
 
-/ Live Calculation Table
 liveAvgTable:([sym:`symbol$()] 
     time:`timespan$();
     avgBid:`float$(); 
@@ -44,38 +37,62 @@ getBidAskAvg:{[st;et;granularity;s]
     :res
  };
 
-/ 3. Upd Function (Robust Casting Mode)
+/ 3. Upd Function (Safe Mode + Auto-Discovery)
 upd:{[t;x]
-    / Capture Raw Message
     lastRawMsg::x;
 
-    / A. SLICE & CAST (The Fix for 'mismatch')
-    / We explicitly cast the incoming columns to the types our table expects.
-    / This handles timestamp vs timespan diffs automatically.
-    d: 4#x;
-    
-    / Cast logic: 
-    / Col 0 (Time) -> "n" (timespan)
-    / Col 1 (Sym)  -> "s" (symbol)
-    / Col 2 (Bid)  -> "f" (float)
-    / Col 3 (Ask)  -> "f" (float)
-    fixedData: ("n";"s";"f";"f") $ d;
-
-    / B. DIAGNOSTIC INSERT
-    / We still log to debugRaw just in case, but use the raw 'd'
-    `debugRaw insert d;
-
-    / C. MAIN INSERT
-    toInsert: $ [t=`chunkStoreKalmanPfillDRA; fixedData; x];
-
     @[{
-        x insert y;
-        / Success? Run Calc
+        / Check if x is a table or list
+        d: $[98=type y; value flip y; y];
+        
+        / Get types of all incoming columns
+        types: type each d;
+        
+        / AUTO-DISCOVERY LOGIC
+        / Find column indices based on expected types
+        / Time: Expect type 16 (timespan) or 12 (timestamp) or 19 (time)
+        timeIdx: first where types within (12h; 19h); 
+        if[null timeIdx; timeIdx: first where types = 16h]; / Check timespan specifically
+
+        / Sym: Expect type 11 (symbol)
+        symIdx: first where types = 11h;
+
+        / Floats: Expect type 9 (float). We need two of them (Bid, Ask).
+        floatIdxs: where types = 9h;
+        bidIdx: floatIdxs 0;
+        askIdx: floatIdxs 1;
+
+        / If we can't find the columns, abort safely
+        if[any null (timeIdx; symIdx; bidIdx; askIdx);
+            -1 "!!! SCHEMA MISMATCH DETECTED";
+            -1 "   Incoming Types: ",(-3!types);
+            -1 "   We need: Time(12/16/19), Sym(11), Float(9), Float(9)";
+            :(); / Return early
+        ];
+
+        / Extract correctly mapped columns
+        colTime: d timeIdx;
+        colSym:  d symIdx;
+        colBid:  d bidIdx;
+        colAsk:  d askIdx;
+
+        / Cast Time if necessary (Timestamp -> Timespan)
+        / If incoming is timestamp (12) or time (19), cast to timespan (16)
+        if[not 16h = type first colTime; colTime: "n"$colTime];
+
+        / Construct Clean Table
+        toInsert: flip `time`sym`Bid`Ask!(colTime; colSym; colBid; colAsk);
+
+        / Insert
+        `chunkStoreKalmanPfillDRA insert toInsert;
+
+        / Run Calc
         runCalc[];
-    };(t;toInsert);{[err; data] 
-        -1 "!!! INSERT ERROR: ",err;
-        -1 "   >> Data types failed even after casting.";
-    }[;toInsert]];
+
+    };(t;x);{[err] 
+        -1 "!!! UPD CRASHED: ",err; 
+        -1 "   >> Please type 'lastRawMsg' to inspect data.";
+    }];
  };
 
 / 4. Calculation Trigger
@@ -83,8 +100,6 @@ runCalc:{
     @[{
         now: exec max time from chunkStoreKalmanPfillDRA;
         if[null now; now:.z.n];
-        
-        / Define 60s window
         st: now - 00:01:00.000;    
         syms: distinct chunkStoreKalmanPfillDRA`sym;
         
@@ -107,4 +122,4 @@ if[not null h;
     h(".u.sub";`chunkStoreKalmanPfillDRA; `);
 ];
 
--1 "RTE Ready (Casting Mode).";
+-1 "RTE Ready (Auto-Discovery Mode).";
