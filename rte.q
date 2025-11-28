@@ -1,23 +1,11 @@
-/ rte.q - Real Time Engine (Sniffer & Debug Mode)
+/ rte.q - Real Time Engine (Fixed for Table Input)
 
 / 0. Map .u.upd to upd
 .u.upd:upd;
 
 / --- DEBUG TOOLS ---
-
-/ 1. Heartbeat
-/ Prints every 5 seconds to prove the process is running
 .z.ts:{ -1 "[RTE] Alive... Waiting for data."; };
 \t 5000
-
-/ 2. Message Sniffer
-/ Captures EVERYTHING sent to this process.
-/ If this prints nothing, the TP is NOT sending data.
-.z.ps:{[x]
-    -1 "[SNIFFER] Received msg: ",(-3!x);
-    value x; / Execute it normally
- };
-
 / -------------------
 
 / 1. Define Schemas
@@ -55,13 +43,20 @@ getBidAskAvg:{[st;et;granularity;s]
     :res
  };
 
-/ 3. Upd Function
+/ 3. Upd Function (The Fix)
 upd:{[t;x]
-    -1 ">> upd CALLED on table: ",string t;
+    / -1 ">> upd CALLED on table: ",string t;
 
     @[{
-        / Slice first 4 columns (Time, Sym, Bid, Ask)
-        toInsert: 4#y;
+        / CRITICAL FIX: Handle Table Input vs List Input
+        / If x is a table (type 98), we must SELECT columns, not slice rows.
+        toInsert: $[98=type x;
+            / Select specific columns and cast Time to Timespan (n) to be safe
+            select time:"n"$time, sym, Bid, Ask from x;
+            / Else (List), take first 4 items
+            4#x
+        ];
+
         `chunkStoreKalmanPfillDRA insert toInsert;
         
         runCalc[];
@@ -100,4 +95,4 @@ if[not null h;
     h(".u.sub";`chunkStoreKalmanPfillDRA; `);
 ];
 
--1 "RTE Ready. Sniffer Active.";
+-1 "RTE Ready. Table-Fix Applied.";
