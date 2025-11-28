@@ -1,14 +1,34 @@
-/ rte.q - Real Time Engine (Paranoid Debug Mode)
+/ rte.q - Real Time Engine (Manual Dispatch Mode)
 
-/ 0. Map .u.upd
+/ 0. Map .u.upd to upd (Just in case)
 .u.upd:upd;
 
 / --- DEBUG TOOLS ---
 .z.ts:{ -1 "[RTE] Alive..."; };
 \t 10000
+
+/ 1. MANUAL DISPATCHER (.z.ps)
+/ This is the specific fix for your issue.
+/ We intercept the message and call upd() manually.
+.z.ps:{[x]
+    / Check if the message is a list starting with `upd or `.u.upd
+    func: first x;
+    
+    / Dispatch Logic
+    if[func in `upd`.u.upd;
+        -1 ">> [SNIFFER] Manually dispatching 'upd' message...";
+        / x[1] is table name, x[2] is data
+        upd[x 1; x 2];
+        :();
+    ];
+
+    / Fallback for other messages
+    -1 "[SNIFFER] Received non-upd msg: ",(-3!x);
+    value x; 
+ };
 / -------------------
 
-/ 1. Define Schema
+/ 2. Define Schema
 delete rteData from `.;
 rteData:([]
     time:`timespan$();
@@ -23,13 +43,13 @@ liveAvgTable:([sym:`symbol$()]
     avgAsk:`float$()
  );
 
-/ 2. Analytics Function
+/ 3. Analytics Function
 getBidAskAvg:{[st;et;granularity;s]
     s:(),s;
-    if[0=count s; -1 "   [TRACE] No symbols."; :()];
+    if[0=count s; :()];
     
     cnt:1+"j"$(et-st)%granularity;
-    if[cnt<1; -1 "   [TRACE] Bad Window."; :()];
+    if[cnt<1; :()];
 
     times:st+granularity*til cnt;
     grid: ([] sym:s) cross ([] time:times);
@@ -37,45 +57,29 @@ getBidAskAvg:{[st;et;granularity;s]
     raw:select sym, time, Bid, Ask from rteData 
         where sym in s, time within (st;et);
 
-    if[0=count raw; 
-        -1 "   [TRACE] No raw data in window."; 
-        :()
-    ];
+    if[0=count raw; :()];
 
     joined:aj[`sym`time; grid; `sym`time xasc raw];
     res:select avgBid:avg Bid, avgAsk:avg Ask by sym from joined;
     :res
  };
 
-/ 3. Upd Function (The Fix)
+/ 4. Upd Function
 upd:{[t;x]
-    / WRAP EVERYTHING in a trap to catch the "Silent Death"
-    @[{
-        -1 ">> upd CALLED. Rows: ",string count y;
-        
-        / 1. DEBUG COLUMNS
-        / Print what columns we actually have to spot mismatches (e.g. bid vs Bid)
-        c: cols y;
-        -1 "   [COLS FOUND] ",(" " sv string c);
-        
-        / 2. CHECK REQUIRED COLS
-        req: `time`sym`Bid`Ask;
-        missing: req where not req in c;
-        if[count missing;
-            -1 "!!! [CRASH AVERTED] Missing columns: ",(-3!missing);
-            :(); / Abort safely
-        ];
+    / Print entry immediately
+    -1 ">> upd CALLED (Manual Dispatch). Rows: ",string count x;
 
-        / 3. SELECT & CAST
-        / We know cols exist now, so this shouldn't crash
-        d: select time, sym, Bid, Ask from y;
+    @[{
+        / 1. SELECT & CAST
+        / Extract only the 4 cols we need from the big table
+        d: select time, sym, Bid, Ask from x;
         d: update "n"$time, "s"$sym, "f"$Bid, "f"$Ask from d;
 
-        / 4. INSERT
+        / 2. INSERT
         `rteData insert d;
         -1 "   [TRACE] Inserted ",string[count d]," rows.";
 
-        / 5. CALC
+        / 3. CALC
         runCalc[];
 
     };(t;x);{[err] 
@@ -83,7 +87,7 @@ upd:{[t;x]
     }];
  };
 
-/ 4. Calculation Trigger
+/ 5. Calculation Trigger
 runCalc:{
     @[{
         now: exec max time from rteData;
@@ -91,20 +95,19 @@ runCalc:{
         st: now - 00:01:00.000;    
         syms: distinct rteData`sym;
         
-        -1 "   [TRACE] Calc running for ",string[count syms]," syms.";
         result: getBidAskAvg[st; now; 00:00:01.000; syms];
         
         if[count result;
             result: update time:now from result;
             `liveAvgTable upsert result;
-            -1 ">> SUCCESS. Live Table Updated.";
+            -1 ">> SUCCESS. Live Table Updated (Rows: ",string[count result],")";
             show liveAvgTable;
             -1 "------------------------------------------------";
         ];
     };(::);{[err] -1 "!!! [CALC CRASH] ",err}];
  };
 
-/ 5. Connection
+/ 6. Connection
 tpPort:5010;
 if[not null "J"$first .z.x; tpPort:"J"$first .z.x];
 h:@[hopen;tpPort;{0N}];
@@ -113,4 +116,4 @@ if[not null h;
     h(".u.sub";`chunkStoreKalmanPfillDRA; `);
 ];
 
--1 "RTE Ready. Paranoid Mode.";
+-1 "RTE Ready. Manual Dispatch Mode.";
