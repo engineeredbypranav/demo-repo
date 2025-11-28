@@ -12,7 +12,6 @@ chunkStoreKalmanPfillDRA:([]
  );
 
 / 1b. Define Debug Schema (Accepts Anything)
-/ This table helps us see what columns are ACTUALLY coming in
 debugRaw:([] 
     c0:(); 
     c1:(); 
@@ -45,21 +44,29 @@ getBidAskAvg:{[st;et;granularity;s]
     :res
  };
 
-/ 3. Upd Function (Diagnostic Mode)
+/ 3. Upd Function (Robust Casting Mode)
 upd:{[t;x]
-    / Capture Raw Message for manual inspection
+    / Capture Raw Message
     lastRawMsg::x;
 
-    / SLICE: Take first 4 columns regardless of what they are
-    slice: 4#x;
+    / A. SLICE & CAST (The Fix for 'mismatch')
+    / We explicitly cast the incoming columns to the types our table expects.
+    / This handles timestamp vs timespan diffs automatically.
+    d: 4#x;
+    
+    / Cast logic: 
+    / Col 0 (Time) -> "n" (timespan)
+    / Col 1 (Sym)  -> "s" (symbol)
+    / Col 2 (Bid)  -> "f" (float)
+    / Col 3 (Ask)  -> "f" (float)
+    fixedData: ("n";"s";"f";"f") $ d;
 
-    / DIAGNOSTIC INSERT: Put into debugRaw (no type checks)
-    / This allows you to type `debugRaw` and SEE the data even if main insert fails
-    `debugRaw insert (slice 0; slice 1; slice 2; slice 3);
+    / B. DIAGNOSTIC INSERT
+    / We still log to debugRaw just in case, but use the raw 'd'
+    `debugRaw insert d;
 
-    / MAIN INSERT (Strict)
-    / We attempt to insert into the typed table
-    toInsert: $ [t=`chunkStoreKalmanPfillDRA; slice; x];
+    / C. MAIN INSERT
+    toInsert: $ [t=`chunkStoreKalmanPfillDRA; fixedData; x];
 
     @[{
         x insert y;
@@ -67,9 +74,7 @@ upd:{[t;x]
         runCalc[];
     };(t;toInsert);{[err; data] 
         -1 "!!! INSERT ERROR: ",err;
-        -1 "   >> Incoming Types (c0, c1, c2, c3): ",(-3!type each data);
-        -1 "   >> Expected Types: 16 (timespan), 11 (symbol), 9 (float), 9 (float)";
-        -1 "   >> CHECK 'debugRaw' TABLE TO SEE COLUMN MISMATCH";
+        -1 "   >> Data types failed even after casting.";
     }[;toInsert]];
  };
 
@@ -78,6 +83,8 @@ runCalc:{
     @[{
         now: exec max time from chunkStoreKalmanPfillDRA;
         if[null now; now:.z.n];
+        
+        / Define 60s window
         st: now - 00:01:00.000;    
         syms: distinct chunkStoreKalmanPfillDRA`sym;
         
@@ -100,4 +107,4 @@ if[not null h;
     h(".u.sub";`chunkStoreKalmanPfillDRA; `);
 ];
 
--1 "RTE Ready. If no data appears, check 'debugRaw' table.";
+-1 "RTE Ready (Casting Mode).";
