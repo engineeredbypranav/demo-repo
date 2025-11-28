@@ -1,15 +1,19 @@
-/ rte.q - Real Time Engine (Production Silent Mode)
+/ rte.q - Real Time Engine (Throttled / Async Mode)
 
 / 0. Map .u.upd
 .u.upd:upd;
 
 / --- CONFIG ---
-/ Heartbeat every 30 seconds (Quiet)
-.z.ts:{ -1 "[RTE] Alive..."; };
-\t 30000
+/ Run Calculation every 1000ms (1 second)
+/ This prevents CPU starvation / Console Freezing
+.z.ts:{ 
+    runCalc[]; 
+    / Optional: Print a dot to show life, or keep silent
+    / -1 "."; 
+ };
+\t 1000
 
 / 1. MANUAL DISPATCHER
-/ Keeps the manual dispatch logic as it proved necessary for your feed
 .z.ps:{[x]
     func: first x;
     if[func in `upd`.u.upd;
@@ -50,8 +54,8 @@ getBidAskAvg:{[st;et;granularity;s]
     :res
  };
 
-/ 4. Upd Function (Silent)
-/ Contains the logic fix for Interleaved Lists, but without the noise.
+/ 4. Upd Function (Insert Only - High Performance)
+/ We removed runCalc[] from here to prevent Livelock.
 upd:{[t;x]
     @[{
         typ: type x;
@@ -89,13 +93,13 @@ upd:{[t;x]
         
         `rteData insert d;
         
-        / Trigger calculation silently
-        runCalc[];
+        / NO CALC HERE. 
+        / We let .z.ts handle it asynchronously.
 
     };(t;x);{[err] -1 "!!! [UPD ERROR] ",err}];
  };
 
-/ 5. Calculation Trigger (Silent)
+/ 5. Calculation Trigger (Called by Timer)
 runCalc:{
     @[{
         now: exec max time from rteData;
@@ -108,7 +112,6 @@ runCalc:{
         if[count result;
             result: update time:now from result;
             `liveAvgTable upsert result;
-            / No print here -> No console flooding
         ];
     };(::);{[err] -1 "!!! [CALC ERROR] ",err}];
  };
@@ -122,4 +125,4 @@ if[not null h;
     h(".u.sub";`chunkStoreKalmanPfillDRA; `);
 ];
 
--1 "RTE Ready. Silent Mode active (Type 'liveAvgTable' to view results).";
+-1 "RTE Ready. Throttled Mode (1s Updates).";
