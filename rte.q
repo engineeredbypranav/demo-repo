@@ -1,4 +1,4 @@
-/ rte.q - Real Time Engine (Fixed for Table Input)
+/ rte.q - Real Time Engine (Force Cast Fix)
 
 / 0. Map .u.upd to upd
 .u.upd:upd;
@@ -43,18 +43,17 @@ getBidAskAvg:{[st;et;granularity;s]
     :res
  };
 
-/ 3. Upd Function (The Fix)
+/ 3. Upd Function (Force Cast Fix)
 upd:{[t;x]
-    / -1 ">> upd CALLED on table: ",string t;
-
     @[{
-        / CRITICAL FIX: Handle Table Input vs List Input
-        / If x is a table (type 98), we must SELECT columns, not slice rows.
+        / Handle Table (Type 98) vs List
         toInsert: $[98=type x;
-            / Select specific columns and cast Time to Timespan (n) to be safe
-            select time:"n"$time, sym, Bid, Ask from x;
-            / Else (List), take first 4 items
-            4#x
+            / FORCE CAST ALL COLUMNS to match schema exactly
+            / This solves the 'type' error if Bid/Ask are ints or Sym is string
+            select time:"n"$time, sym:"s"$sym, Bid:"f"$Bid, Ask:"f"$Ask from x;
+            
+            / Else (List Input fallback)
+            flip `time`sym`Bid`Ask!("n";"s";"f";"f")$\:(4#x)
         ];
 
         `chunkStoreKalmanPfillDRA insert toInsert;
@@ -95,4 +94,4 @@ if[not null h;
     h(".u.sub";`chunkStoreKalmanPfillDRA; `);
 ];
 
--1 "RTE Ready. Table-Fix Applied.";
+-1 "RTE Ready. Force-Cast Mode Applied.";
