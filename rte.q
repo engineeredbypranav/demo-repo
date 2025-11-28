@@ -1,9 +1,10 @@
 / rte.q - Real Time Engine with Forward Fill Average Logic
 
 / 1. Define Schema
-/ NOTE: We assume the first 4 columns coming from the TP are time, sym, Bid, Ask.
+/ CRITICAL CHANGE: Changed 'time' to timestamp$() (type 12/p) to match standard TP output.
+/ If your TP sends timespan (type 16/n), change this back to timespan$().
 chunkStoreKalmanPfillDRA:([]
-    time:`timespan$();
+    time:`timestamp$();
     sym:`symbol$();
     Bid:`float$();
     Ask:`float$()
@@ -11,7 +12,7 @@ chunkStoreKalmanPfillDRA:([]
 
 / Define a keyed table to hold the live state of averages
 liveAvgTable:([sym:`symbol$()] 
-    time:`timespan$();
+    time:`timestamp$();
     avgBid:`float$(); 
     avgAsk:`float$()
  );
@@ -20,10 +21,7 @@ liveAvgTable:([sym:`symbol$()]
 lastRawMsg:();
 
 / 2. Analytics Function: getBidAskAvg
-/ Uses aj (as-of join) for robust forward filling and sampling
 getBidAskAvg:{[st;et;granularity;s]
-    / 0N!"[Calc] Start. Syms: ",(-3!s);
-
     / Ensure s is a list for consistent handling
     s:(),s;
     if[0=count s; :([] sym:`symbol$(); avgBid:`float$(); avgAsk:`float$())];
@@ -34,7 +32,7 @@ getBidAskAvg:{[st;et;granularity;s]
 
     times:st+granularity*til cnt;
     
-    / Construct Grid Table using CROSS (Cartesian Product) - Most Robust Method
+    / Construct Grid Table using CROSS (Cartesian Product)
     grid: ([] sym:s) cross ([] time:times);
     
     / Select raw data within range
@@ -61,12 +59,12 @@ upd:{[t;x]
     / Capture raw msg
     lastRawMsg::x;
 
+    -1 "\n>> UPD TRIGGERED. Table: ",string[t];
+
     / A. Prepare Data for Insertion
-    / Handle potential differences in TP output (List of cols vs Table)
     toInsert: $ [t=`chunkStoreKalmanPfillDRA; 
         / If x is a table (type 98), select cols. 
         / If list (type 0), we slicing first 4. 
-        / CRITICAL: This assumes the feed order is (time; sym; Bid; Ask; ...)
         $[98=type x; 
             select time, sym, Bid, Ask from x; 
             4#x 
@@ -74,18 +72,24 @@ upd:{[t;x]
         x
     ];
 
-    / B. Insert
-    / Using protected evaluation to print RED error if schema mismatches
+    / B. Insert (With Type Debugging)
     @[{
         x insert y;
-    };(t;toInsert);{[err] -1 "!!! INSERT FAILED (Check Types/Order): ",err}];
+        -1 "   >> Insert OK. Rows in chunkStore: ",string count x;
+    };(t;toInsert);{[err; data] 
+        -1 "!!! INSERT FAILED: ",err; 
+        -1 "   >> Debug Info:";
+        -1 "   >> Expected Types: timestamp, symbol, float, float";
+        -1 "   >> Incoming Types: ",(-3!type each data);
+        -1 "   >> Incoming Sample: ",(-3!first each data);
+    }[;toInsert]];
     
     / C. Trigger Calculation
     if[t=`chunkStoreKalmanPfillDRA;
         @[{
             / 1. Determine Window
             now: exec max time from chunkStoreKalmanPfillDRA;
-            if[null now; now:.z.n]; 
+            if[null now; now:.z.p]; / Changed fallback to .z.p (timestamp)
             
             / 2. Define Start Time (60s ago)
             st: now - 00:01:00.000;    
@@ -96,12 +100,14 @@ upd:{[t;x]
             / 4. Run Calc
             result: getBidAskAvg[st; now; 00:00:01.000; syms];
             
+            if[0=count result; -1 "   >> Calc returned 0 rows."];
+
             / 5. Timestamp and Upsert
             result: update time:now from result;
             `liveAvgTable upsert result;
 
             / 6. Visual Confirmation
-            -1 ">> Updated liveAvgTable with ",string[count result]," rows. (Time: ",string[now],")";
+            -1 "   >> Updated liveAvgTable with ",string[count result]," rows. (Time: ",string[now],")";
             show liveAvgTable;
             
         };(::);{[err] -1 "!!! CALC FAILED: ",err}];
@@ -118,4 +124,4 @@ if[null h; -1 "Failed to connect to TP on port ",string tpPort; exit 1];
 
 h(".u.sub";`chunkStoreKalmanPfillDRA; `);
 
--1 "RTE Initialized. Waiting for ticks...";
+-1 "RTE Initialized. Debug Mode: VERBOSE.";
