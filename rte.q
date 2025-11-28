@@ -1,6 +1,6 @@
-/ rte.q - Real Time Engine with Auto-Discovery
+/ rte.q - Real Time Engine (Inspector Mode)
 
-/ 0. Map .u.upd
+/ 0. Map .u.upd to upd (Just in case)
 .u.upd:upd;
 
 / 1. Define Schemas
@@ -10,8 +10,6 @@ chunkStoreKalmanPfillDRA:([]
     Bid:`float$();
     Ask:`float$()
  );
-
-debugRaw:([] c0:(); c1:(); c2:(); c3:());
 
 liveAvgTable:([sym:`symbol$()] 
     time:`timespan$();
@@ -37,62 +35,41 @@ getBidAskAvg:{[st;et;granularity;s]
     :res
  };
 
-/ 3. Upd Function (Safe Mode + Auto-Discovery)
+/ 3. Upd Function (INSPECTOR MODE)
+/ This will NOT crash. It will just tell us what the data looks like.
 upd:{[t;x]
     lastRawMsg::x;
 
+    -1 ">> upd RECEIVED on table: ",string t;
+
+    / Check if x is a table or a list of columns
+    isTable: 98=type x;
+    
+    / Normalize data to a list of columns 'd'
+    d: $ [isTable; value flip x; x];
+
+    / INSPECTION LOGIC
+    / Print the Type of each column
+    -1 "   [TYPES]   ",(-3!type each d);
+    
+    / Print the First Item of each column (Sample Data)
+    / This lets us see "Ah, column 0 is a Symbol, column 1 is Time"
+    safeSample: {[c] $[count c; first c; "empty"]};
+    -1 "   [SAMPLE]  ",(-3!safeSample each d);
+
+    / SAFETY INSERT
+    / We attempt to slice first 4 cols, but we won't cast blindly.
+    / If schema matches, it inserts. If not, it prints error but keeps running.
     @[{
-        / Check if x is a table or list
-        d: $[98=type y; value flip y; y];
-        
-        / Get types of all incoming columns
-        types: type each d;
-        
-        / AUTO-DISCOVERY LOGIC
-        / Find column indices based on expected types
-        / Time: Expect type 16 (timespan) or 12 (timestamp) or 19 (time)
-        timeIdx: first where types within (12h; 19h); 
-        if[null timeIdx; timeIdx: first where types = 16h]; / Check timespan specifically
-
-        / Sym: Expect type 11 (symbol)
-        symIdx: first where types = 11h;
-
-        / Floats: Expect type 9 (float). We need two of them (Bid, Ask).
-        floatIdxs: where types = 9h;
-        bidIdx: floatIdxs 0;
-        askIdx: floatIdxs 1;
-
-        / If we can't find the columns, abort safely
-        if[any null (timeIdx; symIdx; bidIdx; askIdx);
-            -1 "!!! SCHEMA MISMATCH DETECTED";
-            -1 "   Incoming Types: ",(-3!types);
-            -1 "   We need: Time(12/16/19), Sym(11), Float(9), Float(9)";
-            :(); / Return early
-        ];
-
-        / Extract correctly mapped columns
-        colTime: d timeIdx;
-        colSym:  d symIdx;
-        colBid:  d bidIdx;
-        colAsk:  d askIdx;
-
-        / Cast Time if necessary (Timestamp -> Timespan)
-        / If incoming is timestamp (12) or time (19), cast to timespan (16)
-        if[not 16h = type first colTime; colTime: "n"$colTime];
-
-        / Construct Clean Table
-        toInsert: flip `time`sym`Bid`Ask!(colTime; colSym; colBid; colAsk);
-
-        / Insert
+        toInsert: 4#y;
         `chunkStoreKalmanPfillDRA insert toInsert;
-
-        / Run Calc
+        
+        / If insert worked, run calc
         runCalc[];
-
-    };(t;x);{[err] 
-        -1 "!!! UPD CRASHED: ",err; 
-        -1 "   >> Please type 'lastRawMsg' to inspect data.";
-    }];
+        
+    };(t;d);{[err] -1 "   [INSERT FAIL] ",err}];
+    
+    -1 "------------------------------------------------";
  };
 
 / 4. Calculation Trigger
@@ -108,9 +85,9 @@ runCalc:{
         if[count result;
             result: update time:now from result;
             `liveAvgTable upsert result;
-            -1 ">> liveAvgTable updated. Rows: ",string count result;
+            -1 "   >> SUCCESS: liveAvgTable updated. Rows: ",string count result;
         ];
-    };(::);{ -1 "!!! CALC ERROR: ",x }];
+    };(::);{ -1 "   [CALC FAIL] ",x }];
  };
 
 / 5. Connection
@@ -122,4 +99,4 @@ if[not null h;
     h(".u.sub";`chunkStoreKalmanPfillDRA; `);
 ];
 
--1 "RTE Ready (Auto-Discovery Mode).";
+-1 "RTE Ready. Inspecting Data Structure...";
